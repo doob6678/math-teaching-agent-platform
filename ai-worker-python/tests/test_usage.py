@@ -45,6 +45,62 @@ class UsageLedgerTest(unittest.TestCase):
                 else:
                     os.environ["MATH_AGENT_USAGE_JSONL_PATH"] = previous
 
+    def test_insert_usage_writes_cached_tokens_in_extended_column_order(self):
+        """锁死扩展 INSERT 分支的列序（BUG-C1 记账，2026-09-05）：cached_prompt_tokens 必须紧跟 prompt_tokens。
+
+        workload_runtime._call_one 从 DeepSeek usage.prompt_cache_hit_tokens 解析命中数后经
+        UsageEvent.cached_prompt_tokens 落库；此断言防止扩展列与参数顺序错位导致的静默串列。
+        """
+        statements = []
+
+        class Cursor:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_):
+                return False
+
+            def execute(self, sql, params):
+                statements.append((sql, params))
+
+        class Connection:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_):
+                return False
+
+            def cursor(self):
+                return Cursor()
+
+            def close(self):
+                return None
+
+        fake_pymysql = types.SimpleNamespace(connect=lambda **_: Connection())
+        previous_module = sys.modules.get("pymysql")
+        previous_jsonl = os.environ.pop("MATH_AGENT_USAGE_JSONL_PATH", None)
+        sys.modules["pymysql"] = fake_pymysql
+        try:
+            UsageLedger().append(UsageEvent(
+                "run-cache-order", "deepseek", "deepseek-v4-flash", 1, "SUCCESS",
+                2894, 4, 2898, 0.01, "provider", cached_prompt_tokens=2688,
+            ))
+        finally:
+            if previous_module is None:
+                sys.modules.pop("pymysql", None)
+            else:
+                sys.modules["pymysql"] = previous_module
+            if previous_jsonl is not None:
+                os.environ["MATH_AGENT_USAGE_JSONL_PATH"] = previous_jsonl
+
+        self.assertEqual(len(statements), 1)
+        sql, params = statements[0]
+        columns = [column.strip() for column in sql.split("(", 1)[1].split(")", 1)[0].split(",")]
+        self.assertEqual(columns[5], "prompt_tokens")
+        self.assertEqual(columns[6], "cached_prompt_tokens")
+        self.assertEqual(params[5], 2894)
+        self.assertEqual(params[6], 2688)
+
     def test_metrics_ledger_writes_cached_tokens_and_node_timestamps(self):
         """The SQL contract retains nullable timestamps and known/unknown price truth without database mocks."""
         statements = []

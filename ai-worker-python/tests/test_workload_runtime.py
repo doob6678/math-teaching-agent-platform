@@ -162,6 +162,115 @@ class MigratedWorkloadContractTest(unittest.TestCase):
         self.assertEqual(response.json()["decision"], "final")
         self.assertEqual(response.json()["cards"], [])
 
+    def test_react_planner_messages_use_append_style_history(self):
+        # BUG-C1 回归：ReAct 规划器消息必须是追加式 [system, user(base), user(observation)...]。
+        # base user 不含 observations 字段且逐字节稳定，观察消息与 request.observations 逐条对应，
+        # 这样第 N 轮请求前缀完整包含第 N-1 轮全部消息，DeepSeek 前缀缓存的历史部分全部命中
+        # （基准 benchmarks/cache_hit_probe.py：追加式第 2-4 轮 hit≈上一轮 prompt_tokens，87%-93%）。
+        base_payload = {
+            "runId": "react-append-1",
+            "mode": "react",
+            "problem": "求函数定义域",
+            "availableTools": ["search_textbook", "search_textbook"],
+            "evidence": [{"sourceUri": "doc:allowed", "title": "教材", "snippet": "定义域"}],
+            "providerRoute": self.route(),
+        }
+        one_observation = MigratedWorkloadRuntime._react_planner_messages(
+            StudentExplanationRunRequest.model_validate({**base_payload, "observations": ["观察一"]}),
+            ["search_textbook"],
+        )
+        two_observations = MigratedWorkloadRuntime._react_planner_messages(
+            StudentExplanationRunRequest.model_validate({**base_payload, "observations": ["观察一", "观察二"]}),
+            ["search_textbook"],
+        )
+        self.assertEqual([m["role"] for m in one_observation], ["system", "user", "user"])
+        self.assertEqual([m["role"] for m in two_observations], ["system", "user", "user", "user"])
+        parsed_base = json.loads(two_observations[1]["content"])
+        # base user 固定不含 observations：availableTools 去重并带能力描述，观察只能以独立 user 消息追加。
+        self.assertEqual(set(parsed_base), {"problem", "availableTools", "evidence"})
+        self.assertEqual([tool["name"] for tool in parsed_base["availableTools"]], ["search_textbook"])
+        for index, observation in enumerate(["观察一", "观察二"]):
+            self.assertEqual(json.loads(two_observations[2 + index]["content"]), {"observation": observation})
+        # 前缀稳定性（缓存命中的核心性质）：第 N 轮消息列表 = 第 N-1 轮全部消息 + 1 条新 observation。
+        self.assertEqual(two_observations[:len(one_observation)], one_observation)
+        self.assertEqual(json.loads(two_observations[-1]["content"]), {"observation": "观察二"})
+
+    def test_react_planner_messages_attach_image_to_base_user(self):
+        # 追加式下图片必须挂在 base user（messages[1]）上而不是最后一条 observation 上，保持
+        # “图片随题干”的旧行为；observation 消息保持纯文本，否则图片之后的历史轮轮 miss 缓存。
+        request = StudentExplanationRunRequest.model_validate({
+            "runId": "react-append-image-1",
+            "mode": "react",
+            "problem": "求函数定义域",
+            "evidence": [],
+            "observations": ["观察一"],
+            "imageDataUrl": "data:image/png;base64," + "A" * 64,
+            "providerRoute": self.route(),
+        })
+        messages = MigratedWorkloadRuntime._react_planner_messages(request, [])
+        self.assertEqual([m["role"] for m in messages], ["system", "user", "user"])
+        self.assertIsInstance(messages[1]["content"], list)
+        self.assertEqual([part["type"] for part in messages[1]["content"]], ["text", "image_url"])
+        self.assertEqual(json.loads(messages[-1]["content"]), {"observation": "观察一"})
+
+    def test_react_sync_explanation_sends_append_style_messages(self):
+        # 同步 react 路径必须复用 _react_planner_messages：Java 仍传全量累积 observations（契约不变），
+        # 由 Python 拆为逐条追加的独立 user 消息，禁止退回“单条 user 内嵌 observations”的重建式。
+        with patch("app.workload_runtime.MigratedWorkloadRuntime._call_json", return_value=(
+            '{"decision":"action","tools":["search_textbook"],"queries":["函数 单调性"]}',
+            type("Result", (), {"provider": "openai", "model": "gpt-5.6-luna", "usage": lambda self: {"promptTokens": 5, "completionTokens": 6, "totalTokens": 11, "estimatedCost": -1.0}})(),
+        )) as call_json:
+            response = self.client.post(
+                "/v1/student-explanations/sync",
+                headers={"Authorization": "Bearer worker-test-key"},
+                json={
+                    "runId": "explanation-react-append-sync-1",
+                    "mode": "react",
+                    "problem": "求函数定义域",
+                    "availableTools": ["search_textbook"],
+                    "evidence": [{"sourceUri": "doc:allowed", "title": "教材", "snippet": "定义域"}],
+                    "observations": ["观察一", "观察二"],
+                    "providerRoute": self.route(),
+                },
+            )
+        self.assertEqual(response.status_code, 200)
+        messages = call_json.call_args.args[2]
+        self.assertEqual([m["role"] for m in messages], ["system", "user", "user", "user"])
+        self.assertNotIn("observations", json.loads(messages[1]["content"]))
+        self.assertEqual(json.loads(messages[2]["content"]), {"observation": "观察一"})
+        self.assertEqual(json.loads(messages[3]["content"]), {"observation": "观察二"})
+
+    def test_react_stream_uses_append_style_messages(self):
+        # 流式 react 路径与同步路径共用 _react_planner_messages（system 文本同源）；
+        # react 流式仍保持非 json_object 的既有契约，消息形态与同步一致。
+        runtime = MigratedWorkloadRuntime()
+        request = StudentExplanationRunRequest.model_validate({
+            "runId": "explanation-react-append-stream-1",
+            "mode": "react",
+            "problem": "求函数定义域",
+            "availableTools": ["search_textbook"],
+            "evidence": [],
+            "observations": ["观察一"],
+            "providerRoute": self.route(),
+        })
+        captured = {}
+
+        def fake_stream(run_id, route, messages, require_json_object=False, emit_visible_content=True):
+            captured["messages"] = messages
+            captured["require_json_object"] = require_json_object
+            yield {"content": '{"decision":"final","conversationTitle":"定义域","cards":[{"summary":"ok"}]}'}
+            yield {"usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}}
+
+        with patch.object(runtime, "_stream_call_json", side_effect=fake_stream):
+            events = list(runtime.stream_student_explanation(request))
+        messages = captured["messages"]
+        self.assertEqual([m["role"] for m in messages], ["system", "user", "user"])
+        self.assertNotIn("observations", json.loads(messages[1]["content"]))
+        self.assertEqual(json.loads(messages[-1]["content"]), {"observation": "观察一"})
+        self.assertFalse(captured["require_json_object"])
+        self.assertEqual(events[0]["event"], "started")
+        self.assertEqual(events[-1]["event"], "completed")
+
     def test_durable_explanation_reuses_completed_result_and_replays_events(self):
         with tempfile.TemporaryDirectory() as directory, patch.dict(
             os.environ,

@@ -310,32 +310,18 @@ class MigratedWorkloadRuntime:
                     "evidence": [item.model_dump() for item in request.evidence],
                 }, ensure_ascii=False)},
             ]
+            if request.imageDataUrl:
+                # compose 是单轮单条 user，图片替换最后一条 user 的行为保持不变。
+                messages[-1] = {"role": "user", "content": [
+                    {"type": "text", "text": messages[-1]["content"]},
+                    {"type": "image_url", "image_url": {"url": request.imageDataUrl}},
+                ]}
         else:
-            messages = [
-                {"role": "system", "content": (
-                    "你是高中数学讲解的受限 ReAct 规划器。只返回 JSON："
-                    "{\"decision\":\"action|final\",\"tools\":[],\"queries\":[],"
-                    "\"conversationTitle\":\"\",\"cards\":[]}。"
-                    "final 必须同时返回 cards，引用只能来自 evidence。不要输出推理过程或 Markdown。"
-                    "题干已经给出全部条件且可通过代数、几何或定义直接完成的题目，必须选择 final，"
-                    "不得为了复述通用概念而检索；只有缺少题目所必需的外部事实时才能选择 action。"
-                    "对照 availableTools 中每个工具能取到的事实类型自主判断：题目所需的事实在题目之外、"
-                    "且某个工具恰好能取到时才调用；检索词写具体知识点名，2-4 个。"
-                    "思考时请用连贯完整的中文说明判断依据；不要在思考中逐字拼装 JSON 或输出英文碎片。"
-                    + MATH_MARKUP_OUTPUT_CONTRACT
-                )},
-                {"role": "user", "content": json.dumps({
-                    "problem": request.problem,
-                    "availableTools": react_tool_catalog_entries(request.availableTools),
-                    "observations": request.observations,
-                    "evidence": [item.model_dump() for item in request.evidence],
-                }, ensure_ascii=False)},
-            ]
-        if request.imageDataUrl:
-            messages[-1] = {"role": "user", "content": [
-                {"type": "text", "text": messages[-1]["content"]},
-                {"type": "image_url", "image_url": {"url": request.imageDataUrl}},
-            ]}
+            # BUG-C1（2026-09-05）：react 分支与同步路径 _react_student_explanation 统一收敛到
+            # _react_planner_messages 的追加式消息构造，删除此前两处几乎重复、且把全量 observations
+            # 内嵌进单条 user 的重建式构造。统一后本分支的 system 文本与同步路径逐字一致
+            # （此前流式分支另持一份措辞不同的独立拷贝），消除双份 prompt 造成的缓存分叉与维护漂移。
+            messages = self._react_planner_messages(request, list(dict.fromkeys(request.availableTools)))
         yield {"event": "started", "data": {"runId": request.runId}}
         content_parts: list[str] = []
         reasoning_parts: list[str] = []
@@ -542,8 +528,23 @@ class MigratedWorkloadRuntime:
         self._ledger.append(UsageEvent(run_id, provider, model, attempt, "SUCCESS", prompt, completion, total, cost, "provider" if raw_usage else "fallback"))
         return ProviderResult(provider, model, content, prompt, completion, total, cost)
 
-    def _react_student_explanation(self, request: StudentExplanationRunRequest) -> dict[str, Any]:
-        available_tools = list(dict.fromkeys(request.availableTools))
+    @staticmethod
+    def _react_planner_messages(
+            request: StudentExplanationRunRequest, available_tools: list[str]) -> list[dict[str, Any]]:
+        """统一构造 ReAct 规划器的“追加式”消息列表（BUG-C1 修复，2026-09-05）。
+
+        为什么改追加式：DeepSeek 前缀缓存要求请求 messages 前缀逐字节一致才命中。旧实现每轮把
+        全量累积的 observations 重新 json.dumps 进单条 user 消息重建 [system, user]，观察逐轮增长
+        使前缀从中部开始分叉，缓存轮轮未命中（线上实测命中率仅 7.2%）。追加式把第 1 条 user 固定为
+        不含 observations 的 base（problem+availableTools+evidence，逐字节稳定），已有观察逐条以
+        独立 user 消息追加其后：第 N 轮请求的前缀完整包含第 N-1 轮全部消息，历史部分全部命中
+        （基准 benchmarks/cache_hit_probe.py 实测：追加式第 2-4 轮 hit≈上一轮 prompt_tokens，
+        87%-93%；重建式第 2 轮 hit=0、第 3-4 轮最高仅 33%）。
+
+        Java 契约不变：observations 仍由 Java 每轮传全量累积列表，由本方法在 Python 侧拆为逐条追加，
+        流式 stream_student_explanation 与同步 _react_student_explanation 共用本构造，禁止再各写一份。
+        system 教学文本与可见性边界保持不变：教学正文仍只由模型依据请求内容生成，Java/前端不补写。
+        """
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": (
                 "你是高中数学讲解的受限 ReAct 规划器。只返回 JSON："
@@ -556,18 +557,32 @@ class MigratedWorkloadRuntime:
                 "必须返回 final；不得仅为讲解通用概念而调用检索。"
                 + MATH_MARKUP_OUTPUT_CONTRACT
             )},
+            # base user：第 1 轮与后续轮次逐字节一致（不含 observations），是缓存命中的锚点。
             {"role": "user", "content": json.dumps({
                 "problem": request.problem,
                 "availableTools": react_tool_catalog_entries(available_tools),
-                "observations": request.observations,
                 "evidence": [item.model_dump() for item in request.evidence],
             }, ensure_ascii=False)},
         ]
+        # 已有观察逐条追加为独立 user 消息：第 N 轮相对第 N-1 轮只在末尾新增，历史前缀保持逐字节一致。
+        for observation in request.observations:
+            messages.append({
+                "role": "user",
+                "content": json.dumps({"observation": observation}, ensure_ascii=False),
+            })
         if request.imageDataUrl:
-            messages[-1] = {"role": "user", "content": [
-                {"type": "text", "text": messages[-1]["content"]},
+            # 图片必须挂在 base user（messages[1]）上，保持“图片随题干”的旧行为；追加式下不能沿用旧代码
+            # 的 messages[-1] 替换，否则图片会落到最后一条 observation 上，使图片之后的历史轮轮 miss 缓存。
+            messages[1] = {"role": "user", "content": [
+                {"type": "text", "text": messages[1]["content"]},
                 {"type": "image_url", "image_url": {"url": request.imageDataUrl}},
             ]}
+        return messages
+
+    def _react_student_explanation(self, request: StudentExplanationRunRequest) -> dict[str, Any]:
+        available_tools = list(dict.fromkeys(request.availableTools))
+        # BUG-C1：消息构造统一走 _react_planner_messages（追加式），删除此处与流式分支重复的重建式构造。
+        messages = self._react_planner_messages(request, available_tools)
         content, result = self._call_json(request.runId, request.providerRoute, messages)
         parsed = self._json_object(content)
         decision = str(parsed.get("decision") or "final").strip().lower()
@@ -809,11 +824,22 @@ class MigratedWorkloadRuntime:
             completion = int(usage.get("completion_tokens", 0) or 0)
             total = int(usage.get("total_tokens", 0) or 0)
             source = "provider"
+            cached_prompt_tokens = 0
             if total <= 0:
                 prompt, completion, total = fallback_tokens(messages, content)
                 source = "fallback"
+            else:
+                # BUG-C1 记账（2026-09-05）：DeepSeek 网关在 usage 里返回 prompt_cache_hit_tokens /
+                # prompt_cache_miss_tokens（命中前缀缓存的 prompt token 数）；其他 OpenAI 兼容网关没有
+                # 该字段时按 0 记账。缓存命中数只做记账，不影响计费口径；fallback 估算路径没有真实
+                # 命中数，保持 0。UsageEvent.cached_prompt_tokens 位于 error_code 之后，用关键字传参
+                # 避免与 legacy INSERT 分支（无 cached 列）的参数顺序混淆，_insert_usage 已按列名落库。
+                cached_prompt_tokens = int(usage.get("prompt_cache_hit_tokens", 0) or 0)
             cost = cost_for(provider, model, prompt, completion)
-            self._ledger.append(UsageEvent(run_id, provider, model, attempt, "SUCCESS", prompt, completion, total, cost, source))
+            self._ledger.append(UsageEvent(
+                run_id, provider, model, attempt, "SUCCESS", prompt, completion, total, cost, source,
+                cached_prompt_tokens=cached_prompt_tokens,
+            ))
             return ProviderResult(provider, model, content, prompt, completion, total, cost)
         except (KeyError, ValueError, requests.RequestException) as exc:
             self._ledger.append(UsageEvent(run_id, provider, model, attempt, "FAILED", 0, 0, 0, -1.0, "unavailable", type(exc).__name__))
