@@ -443,7 +443,7 @@ function buildWorkspaceSummary(
     },
     {
       label: "校对结论",
-      value: reviewSummary?.badge ?? "未返回",
+      value: reviewSummary?.badge ?? "未校对",
       detail: reviewSummary?.detail ?? "当前任务还没有结构化校对摘要。",
       tone: reviewSummary?.tone ?? "neutral" as const,
     },
@@ -451,7 +451,8 @@ function buildWorkspaceSummary(
 }
 
 function buildReviewSummary(task: TeachingTaskResponse | null) {
-  if (!task?.draftReview) return null;
+  // PENDING 是后端"校对尚未运行"的如实占位（历史 null 快照已归一），不得渲染成通过结论。
+  if (!task?.draftReview || task.draftReview.status === "PENDING") return null;
   const review = task.draftReview;
   const warningCount = review.findings.filter((item) => item.severity !== "info").length;
   if (review.status === "READY") {

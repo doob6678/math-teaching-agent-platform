@@ -27,8 +27,9 @@ public final class TeachingDraftMerger {
         TeachingDraftSections safeSections = sections == null
                 ? new TeachingDraftSections("", "", List.of(), List.of(), List.of(), List.of())
                 : sections;
+        // 无校对输入时不得伪造 READY 通过结论，统一用 PENDING 表达"未运行"（与 VO 默认值同一语义）。
         TeachingDraftReview safeReview = review == null
-                ? new TeachingDraftReview("READY", List.of(), List.of())
+                ? new TeachingDraftReview("PENDING", List.of(), List.of())
                 : review;
         String mergedStudentWorksheet = safeSections.studentWorksheet();
         List<String> mergedLectureCards = safeSections.lectureCards();

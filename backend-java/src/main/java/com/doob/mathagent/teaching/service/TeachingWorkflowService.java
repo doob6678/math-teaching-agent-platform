@@ -986,8 +986,10 @@ public class TeachingWorkflowService extends TeachingWorkflowExecutionSupport {
         }
         String teacherDraft = task.teacherHandoutLatex();
         String studentDraft = task.studentHandoutLatex();
-        if (task.status() != TeachingTaskStatus.COMPLETED && task.status() != TeachingTaskStatus.FAILED) {
-            return false;
+        if (task.status() == TeachingTaskStatus.CREATED || task.status() == TeachingTaskStatus.RUNNING) {
+            // 2026-09-07 老板验收定案：运行中快照必须可见。历史列表靠它渲染"生成中"条目，
+            // 刷新后也以此为进度恢复来源；上方的标题有效性与协议泄漏检查足以排除脏数据。
+            return true;
         }
         if (task.status() == TeachingTaskStatus.FAILED) {
             return hasReadableHandoutContent(teacherDraft)

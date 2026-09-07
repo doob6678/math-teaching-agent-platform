@@ -75,11 +75,13 @@ public record TeachingTaskResponse(
         draftSections = draftSections == null
                 ? new TeachingDraftSections("", "", List.of(), List.of(), List.of(), List.of())
                 : draftSections;
+        // null 快照的语义是"校对尚未运行"，必须如实归一为 PENDING：曾因默认 READY，
+        // RUNNING 任务在前端同屏显示"生成中 + 校对已通过"的矛盾信号（2026-09-07 调查记录）。
         draftReview = draftReview == null
-                ? new TeachingDraftReview("READY", List.of(), List.of())
+                ? new TeachingDraftReview("PENDING", List.of(), List.of())
                 : draftReview;
         mergeResult = mergeResult == null
-                ? new TeachingDraftMergeResult("READY", draftSections, List.of(), List.of(), List.of())
+                ? new TeachingDraftMergeResult("PENDING", draftSections, List.of(), List.of(), List.of())
                 : mergeResult;
         String normalizedWatermark = normalizeWatermarkText(watermarkText);
         headerLeft = normalizeChrome(headerLeft, normalizedWatermark);

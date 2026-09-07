@@ -18,12 +18,20 @@ class TeachingWorkflowHistoryVisibilityTest {
                 "",
                 null))).isTrue();
 
+        // 2026-09-07 老板验收定案：运行中/排队中的持久化快照必须进入历史列表，
+        // 前端据此渲染"生成中"条目并在刷新后恢复进度（正文尚未产出也允许可见）。
         assertThat(TeachingWorkflowService.isFrontendDisplayableTask(task(
                 TeachingTaskStatus.RUNNING,
                 "反比例函数学生讲义",
-                "\\section{反比例函数}\\n$y=\\frac{k}{x}$，整理定义、图像、性质和课堂练习。",
                 "",
-                null))).isFalse();
+                "",
+                null))).isTrue();
+        assertThat(TeachingWorkflowService.isFrontendDisplayableTask(task(
+                TeachingTaskStatus.CREATED,
+                "反比例函数学生讲义",
+                "",
+                "",
+                null))).isTrue();
 
         assertThat(TeachingWorkflowService.isFrontendDisplayableTask(task(
                 TeachingTaskStatus.FAILED,
@@ -74,6 +82,14 @@ class TeachingWorkflowHistoryVisibilityTest {
                 "\\section{双曲线}\\nMCP bearer subject type api access 调试信息。",
                 "",
                 null))).isFalse();
+    }
+
+    @Test
+    void missingReviewSnapshotDefaultsToPendingNotReady() {
+        // null 校对快照必须归一为 PENDING：曾因默认 READY，RUNNING 任务在前端同屏显示"生成中+已通过"。
+        TeachingTaskResponse pending = task(TeachingTaskStatus.RUNNING, "反比例函数学生讲义", "", "", null);
+        assertThat(pending.draftReview().status()).isEqualTo("PENDING");
+        assertThat(pending.mergeResult().status()).isEqualTo("PENDING");
     }
 
     private static TeachingTaskResponse task(
