@@ -254,6 +254,12 @@ public class PythonTeachingHandoutClient implements TeachingHandoutAiClient, Mod
                     return Optional.of(repaired);
                 }
             }
+            // 非 REPAIRED 必须留下诊断：worker 的 problems 是结构校验码（丢标记/丢标题/截断），
+            // 没有这行日志时导出只能落 recovery-stub，排障时无法区分"模型没修"与"修了但被拒"。
+            LOGGER.warn("LaTeX repair run {} turn {} not publishable: status={} problems={}",
+                    runId, turn,
+                    root == null ? "null" : root.path("status").asText(""),
+                    root == null ? "" : root.path("problems").toString());
             return Optional.empty();
         } catch (RuntimeException exception) {
             LOGGER.warn("LaTeX repair call failed for run {} turn {}: {}", runId, turn, exception.toString());

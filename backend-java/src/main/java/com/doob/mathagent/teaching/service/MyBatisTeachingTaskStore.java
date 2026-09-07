@@ -2,6 +2,7 @@ package com.doob.mathagent.teaching.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.doob.mathagent.teaching.TeachingEvidence;
 import com.doob.mathagent.teaching.entity.TeachingTaskEntity;
 import com.doob.mathagent.teaching.mapper.TeachingTaskMapper;
 import com.doob.mathagent.teaching.mq.LectureTaskLease;
@@ -10,7 +11,10 @@ import com.doob.mathagent.teaching.vo.TeachingTaskResponse;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.dao.DuplicateKeyException;
@@ -106,6 +110,10 @@ public class MyBatisTeachingTaskStore implements TeachingTaskStore {
         if (existing == null) {
             mapper.insert(entity);
         } else {
+            TeachingTaskResponse carried = carryDurableImageBindings(existing, task);
+            if (carried != task) {
+                entity.setResponseJson(writeResponse(carried));
+            }
             // Workflow snapshots change visible DAG progress, while the Worker CAS state machine owns lease/retry
             // columns. Preserving those values prevents a progress checkpoint from accidentally stealing a lease.
             entity.setStatus(existing.getStatus());
@@ -132,8 +140,9 @@ public class MyBatisTeachingTaskStore implements TeachingTaskStore {
             String ownerKey,
             String idempotencyKey,
             TeachingTaskResponse runningTask) {
+        TeachingTaskResponse carried = carryDurableImageBindings(mapper.selectById(runningTask.taskId()), runningTask);
         int updated = mapper.prepareLectureTaskForResume(
-                runningTask.taskId(), ownerKey.strip(), writeResponse(runningTask), Instant.now());
+                carried.taskId(), ownerKey.strip(), writeResponse(carried), Instant.now());
         if (updated != 1) {
             throw new IllegalStateException("Teaching task could not be prepared for resume");
         }
@@ -142,8 +151,9 @@ public class MyBatisTeachingTaskStore implements TeachingTaskStore {
 
     @Override
     public boolean saveOwnedRunning(LectureTaskLease lease, TeachingTaskResponse task) {
+        TeachingTaskResponse carried = carryDurableImageBindings(mapper.selectById(lease.taskId()), task);
         return mapper.saveOwnedRunningLectureTask(
-                lease.taskId(), lease.token(), writeResponse(task), currentStage(task, null), Instant.now()) == 1;
+                lease.taskId(), lease.token(), writeResponse(carried), currentStage(carried, null), Instant.now()) == 1;
     }
 
     @Override
@@ -154,8 +164,9 @@ public class MyBatisTeachingTaskStore implements TeachingTaskStore {
     @Override
     public boolean completeOwned(LectureTaskLease lease, TeachingTaskResponse task) {
         Instant now = Instant.now();
+        TeachingTaskResponse carried = carryDurableImageBindings(mapper.selectById(lease.taskId()), task);
         return mapper.completeOwnedLectureTask(
-                lease.taskId(), lease.token(), writeResponse(task), currentStage(task, null), now) == 1;
+                lease.taskId(), lease.token(), writeResponse(carried), currentStage(carried, null), now) == 1;
     }
 
     @Override
@@ -163,8 +174,9 @@ public class MyBatisTeachingTaskStore implements TeachingTaskStore {
             LectureTaskLease lease, TeachingTaskResponse task, String error, int maximumAttempts) {
         boolean retry = lease.retryCount() < maximumAttempts;
         Instant now = Instant.now();
+        TeachingTaskResponse carried = carryDurableImageBindings(mapper.selectById(lease.taskId()), task);
         int changed = mapper.failOwnedLectureTask(
-                lease.taskId(), lease.token(), writeResponse(task), retry ? "RETRYING" : "FAILED", safeError(error),
+                lease.taskId(), lease.token(), writeResponse(carried), retry ? "RETRYING" : "FAILED", safeError(error),
                 retry ? null : now, now);
         if (changed != 1) {
             return LectureTaskLeaseStore.FailureOutcome.LEASE_LOST;
@@ -218,5 +230,64 @@ public class MyBatisTeachingTaskStore implements TeachingTaskStore {
         } catch (JsonProcessingException exception) {
             throw new IllegalStateException("Teaching task response JSON is corrupted: " + entity.getTaskId(), exception);
         }
+    }
+
+    /**
+     * Broker canonical 精读会把题图授权绑定（imageRefs）写回持久化账本，而编排器的进度快照由运行开始时的
+     * 内存 evidence 构建、不含这些绑定；不结转的话精读之后的任何一次保存都会抹掉绑定，导出端按账本反查
+     * 失败即 fail-closed 丢图（2026-09-07 椭圆任务 LaTeX 有图行但 PDF 无图事故）。
+     */
+    private TeachingTaskResponse carryDurableImageBindings(TeachingTaskEntity existing, TeachingTaskResponse task) {
+        if (existing == null || existing.getResponseJson() == null || existing.getResponseJson().isBlank()
+                || task.evidence() == null || task.evidence().isEmpty()) {
+            return task;
+        }
+        TeachingTaskResponse persisted;
+        try {
+            persisted = objectMapper.readValue(existing.getResponseJson(), TeachingTaskResponse.class);
+        } catch (JsonProcessingException exception) {
+            // 历史快照损坏不能阻塞本次保存；绑定结转尽力而为。
+            return task;
+        }
+        Map<String, List<Map<String, String>>> durableBindings = new HashMap<>();
+        for (TeachingEvidence row : persisted.evidence() == null
+                ? List.<TeachingEvidence>of() : persisted.evidence()) {
+            if (!row.imageRefs().isEmpty()) {
+                durableBindings.put(evidenceIdentityKey(row), row.imageRefs());
+            }
+        }
+        if (durableBindings.isEmpty()) {
+            return task;
+        }
+        List<TeachingEvidence> merged = new ArrayList<>(task.evidence().size());
+        boolean changed = false;
+        for (TeachingEvidence row : task.evidence()) {
+            List<Map<String, String>> durable = durableBindings.get(evidenceIdentityKey(row));
+            if (durable == null || row.imageRefs().containsAll(durable)) {
+                merged.add(row);
+                continue;
+            }
+            List<Map<String, String>> combined = new ArrayList<>(row.imageRefs());
+            for (Map<String, String> ref : durable) {
+                if (!combined.contains(ref)) {
+                    combined.add(ref);
+                }
+            }
+            merged.add(withImageRefs(row, combined));
+            changed = true;
+        }
+        return changed ? task.withEvidence(List.copyOf(merged)) : task;
+    }
+
+    /** 证据行身份：范围+文档+块+真题题号，与 broker 回写匹配键一致，防止跨文档串绑定。 */
+    private static String evidenceIdentityKey(TeachingEvidence row) {
+        return row.sourceScope() + '\0' + row.sourceDocumentId() + '\0' + row.chunkId()
+                + '\0' + row.canonicalQuestionNumber();
+    }
+
+    private static TeachingEvidence withImageRefs(TeachingEvidence row, List<Map<String, String>> refs) {
+        return new TeachingEvidence(row.sourceScope(), row.sourceTitle(), row.chunkId(), row.pageNo(),
+                row.snippet(), row.imagePath(), row.imageDescription(), row.sourceDocumentId(), row.sourceType(),
+                row.sourceUrl(), row.sourcePath(), row.assetIds(), row.canonicalQuestionNumber(), List.copyOf(refs));
     }
 }

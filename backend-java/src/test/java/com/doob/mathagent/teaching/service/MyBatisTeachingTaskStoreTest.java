@@ -2,7 +2,9 @@ package com.doob.mathagent.teaching.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.doob.mathagent.teaching.TeachingEvidence;
 import com.doob.mathagent.teaching.TeachingTaskStatus;
+import com.doob.mathagent.teaching.entity.TeachingTaskEntity;
 import com.doob.mathagent.teaching.mapper.TeachingTaskMapper;
 import com.doob.mathagent.teaching.mq.LectureTaskLease;
 import com.doob.mathagent.teaching.mq.LectureTaskLeaseStore;
@@ -13,6 +15,7 @@ import java.lang.reflect.Proxy;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 
@@ -25,6 +28,9 @@ class MyBatisTeachingTaskStoreTest {
                 TeachingTaskMapper.class.getClassLoader(),
                 new Class<?>[] {TeachingTaskMapper.class},
                 (proxy, method, arguments) -> {
+                    if ("selectById".equals(method.getName())) {
+                        return null;
+                    }
                     if ("failOwnedLectureTask".equals(method.getName())) {
                         capturedArguments.set(arguments);
                         return 1;
@@ -60,6 +66,9 @@ class MyBatisTeachingTaskStoreTest {
                 TeachingTaskMapper.class.getClassLoader(),
                 new Class<?>[] {TeachingTaskMapper.class},
                 (proxy, method, arguments) -> {
+                    if ("selectById".equals(method.getName())) {
+                        return null;
+                    }
                     if ("prepareLectureTaskForResume".equals(method.getName())) {
                         capturedArguments.set(arguments);
                         return 1;
@@ -100,6 +109,55 @@ class MyBatisTeachingTaskStoreTest {
                 "owner_key = #{ownerKey}",
                 "status IN ('FAILED', 'RETRYING', 'COMPLETED')",
                 "status = 'RUNNING' AND (lease_expire_at IS NULL OR lease_expire_at &lt; #{updatedAt})");
+    }
+
+    /**
+     * broker canonical 精读写回的题图绑定必须跨编排器进度保存存活：椭圆事故中精读之后的每次
+     * saveOwnedRunning 都用内存快照覆盖了账本，导出反查失败 fail-closed 丢掉了全部图片。
+     */
+    @Test
+    void progressSavesCarryDurableImageBindingsIntoStaleMemorySnapshot() throws Exception {
+        ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
+        List<Map<String, String>> bindings = List.of(Map.of(
+                "markdownLine", "![source-image:e3bf1957645d-image-001](figures/q-016-01.png)",
+                "logicalPath", "figures/q-016-01.png"));
+        TeachingTaskResponse persisted = runningTask().withEvidence(
+                List.of(canonicalEvidence("doc-16", "16", bindings)));
+        TeachingTaskEntity existing = new TeachingTaskEntity();
+        existing.setTaskId("task-failed");
+        existing.setResponseJson(objectMapper.writeValueAsString(persisted));
+        AtomicReference<Object[]> capturedArguments = new AtomicReference<>();
+        TeachingTaskMapper mapper = (TeachingTaskMapper) Proxy.newProxyInstance(
+                TeachingTaskMapper.class.getClassLoader(),
+                new Class<?>[] {TeachingTaskMapper.class},
+                (proxy, method, arguments) -> {
+                    if ("selectById".equals(method.getName())) {
+                        return existing;
+                    }
+                    if ("saveOwnedRunningLectureTask".equals(method.getName())) {
+                        capturedArguments.set(arguments);
+                        return 1;
+                    }
+                    throw new AssertionError("Unexpected mapper call: " + method.getName());
+                });
+        MyBatisTeachingTaskStore store = new MyBatisTeachingTaskStore(mapper, objectMapper);
+        // 编排器内存快照：同一证据行但 imageRefs 为空（精读前构建的旧视图）。
+        TeachingTaskResponse stale = runningTask().withEvidence(
+                List.of(canonicalEvidence("doc-16", "16", List.of())));
+
+        boolean saved = store.saveOwnedRunning(
+                new LectureTaskLease("task-failed", "lease-bind", "worker-a", 1, Instant.now()), stale);
+
+        assertThat(saved).isTrue();
+        TeachingTaskResponse written = objectMapper.readValue(
+                (String) capturedArguments.get()[2], TeachingTaskResponse.class);
+        assertThat(written.evidence().get(0).imageRefs()).isEqualTo(bindings);
+    }
+
+    private static TeachingEvidence canonicalEvidence(
+            String documentId, String questionNumber, List<Map<String, String>> imageRefs) {
+        return new TeachingEvidence("CANONICAL_MATH_PAPER", "canonical paper", "chunk-" + documentId, 0,
+                "snippet", "", "", documentId, "gaokao", "", "", List.of(), questionNumber, imageRefs);
     }
 
     private static TeachingTaskResponse runningTask() {

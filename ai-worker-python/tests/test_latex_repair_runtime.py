@@ -10,7 +10,12 @@ from fastapi import HTTPException
 import pytest
 
 from app import latex_repair_runtime
-from app.latex_repair_runtime import LatexRepairRequest, LatexRepairRuntime, validate_repair
+from app.latex_repair_runtime import (
+    LatexRepairRequest,
+    LatexRepairRuntime,
+    repair_provider_order,
+    validate_repair,
+)
 
 
 DOCUMENT = (
@@ -25,6 +30,16 @@ def _request(**overrides) -> LatexRepairRequest:
     base = {"runId": "run-latex-001", "latexSource": DOCUMENT, "compilerError": "! Missing $ inserted."}
     base.update(overrides)
     return LatexRepairRequest.model_validate(base)
+
+
+def test_empty_repair_providers_env_falls_back_to_handout_order():
+    # 2026-09-07 立体几何导出 503 事故：compose 把该变量注入为空字符串，
+    # 空串必须与未注入同义，回退到讲义生成顺序，而不是让修复通道无 provider 空转。
+    with patch.dict(os.environ, {
+        "MATH_AGENT_LATEX_REPAIR_PROVIDERS": "",
+        "MATH_AGENT_HANDOUT_PROVIDER_ORDER": "openai,deepseek",
+    }):
+        assert repair_provider_order() == ["openai", "deepseek"]
 
 
 def test_validate_repair_accepts_syntax_only_changes():

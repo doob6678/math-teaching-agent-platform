@@ -27,7 +27,9 @@ from app import provider_profiles
 from app.usage import UsageEvent, UsageLedger, cost_for, fallback_tokens
 
 DEFAULT_LATEX_REPAIR_TIMEOUT_SECONDS = 60.0
-DEFAULT_LATEX_REPAIR_MAX_OUTPUT_TOKENS = 16_000
+# 修复输出是整份讲义文档；16k 时 gpt-5.6-terra 在立体几何任务上输出被截断，
+# 触发 REPAIR_TRUNCATED/MISSING_ENVELOPE 落 recovery-stub（2026-09-07 验收记录第四节）。
+DEFAULT_LATEX_REPAIR_MAX_OUTPUT_TOKENS = 32_000
 # 修复输入是 Java sanitize 后的完整 XeLaTeX 文档；上限防御异常大的任务体。
 MAX_LATEX_REPAIR_SOURCE_CHARS = 200_000
 MAX_COMPILER_ERROR_CHARS = 4_000
@@ -60,9 +62,10 @@ class LatexRepairRequest(BaseModel):
 
 def repair_provider_order() -> list[str]:
     """Provider rotation for repairs, defaulting to the handout generation order env."""
-    configured = os.getenv(
-        "MATH_AGENT_LATEX_REPAIR_PROVIDERS",
-        os.getenv("MATH_AGENT_HANDOUT_PROVIDER_ORDER", "openai"))
+    # 必须用 `or` 而不是 getenv 默认值：compose 会把该变量注入为空字符串，
+    # 空串同样应回退到手足生成顺序（2026-09-07 立体几何导出 503 事故：空串让修复通道空转）。
+    configured = os.getenv("MATH_AGENT_LATEX_REPAIR_PROVIDERS") or os.getenv(
+        "MATH_AGENT_HANDOUT_PROVIDER_ORDER", "openai")
     return [item.strip().lower() for item in configured.split(",") if item.strip()]
 
 
@@ -109,7 +112,8 @@ class LatexRepairRuntime:
             "合同（违反任何一条即修复无效）：",
             "1. 只能修复 TeX 语法：补齐定界符、转义 _ # % & { }、修复 \\left/\\right 配对、环境配对。",
             "2. 题目、解析、图片标记 [[HANDOUTIMAGE:...]]、章节结构必须逐字保留，禁止增删改写教学内容。",
-            "3. 直接输出完整文档，不要 Markdown 围栏、不要解释。",
+            "3. 直接输出完整文档，不要 Markdown 围栏、不要解释；"
+            "必须从 \\documentclass 第一行到 \\end{document} 最后一行逐字完整输出，禁止省略中间任何段落。",
             f"编译器错误摘录（第 {request.turn} 轮）：",
             request.compiler_error or "(未提供错误摘录：请检查未配对定界符与数学模式)",
             "文档：",
