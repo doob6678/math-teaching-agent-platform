@@ -254,6 +254,43 @@ class AgentToolBrokerControllerTest {
             assertThat(imageRefs.get(1)).containsEntry("logicalPath", "图形资料/IMAJES/image-002.png");
         });
     }
+    /**
+     * 2026-09-07 双曲线讲义零图片事故回归：Python 的 resource_curation 只按 transparentRef 的 gaokao:// 前缀
+     * 自动补排 canonical_question_read，而 canonical 真题的 figures/ 图片行只有该通道能物化给 Writer。
+     * 因此 handout-context 必须按来源域下发 transparentRef；缺题号的行不得下发 gaokao:// 信号（否则补排必 404）。
+     */
+    @Test
+    void handoutContextCarriesGaokaoTransparentRefSoCanonicalQuestionReadsAreScheduled() throws Exception {
+        String workerKey = "worker-secret";
+        String runId = "run-context-gaokao-001";
+        TeachingEvidence numbered = new TeachingEvidence(
+                "CANONICAL_MATH_PAPER", "2024年高考数学试卷（天津）.pdf", "q-block-8", 12,
+                "已知双曲线焦点到渐近线距离。", "", "", "paper-tj-2024", "canonical_math_paper", "", "",
+                List.of("c34cd5d1-313e-5c1e-a574-f2e594d04eaa"), "8", List.of());
+        TeachingEvidence unnumbered = new TeachingEvidence(
+                "CANONICAL_MATH_PAPER", "无题号试卷.pdf", "q-block-x", 1,
+                "缺少题号的行无法单题精读。", "", "", "paper-x", "canonical_math_paper", "", "",
+                List.of(), "", List.of());
+        com.doob.mathagent.retrieval.CanonicalMathPaperAuthorizedBlockReader reader =
+                new com.doob.mathagent.retrieval.CanonicalMathPaperAuthorizedBlockReader(tempDir) {
+                    @Override public boolean isAvailable(String opaqueDocumentRef) { return true; }
+                };
+        AgentToolBrokerController controller = new AgentToolBrokerController(
+                null, null, null, reader, null,
+                new MockEnvironment().withProperty("math-agent.agent-worker.shared-key", workerKey),
+                null, new InMemoryTaskStore(task(runId, List.of(numbered, unnumbered))), null,
+                new com.fasterxml.jackson.databind.ObjectMapper());
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> items = (List<Map<String, Object>>) controller.handoutContext(workerKey,
+                new HandoutContextRequest(runId, List.of(evidenceRef(workerKey, runId, numbered),
+                        evidenceRef(workerKey, runId, unnumbered)), 12)).get("items");
+
+        assertThat(items).hasSize(2);
+        assertThat(items.get(0)).containsEntry("transparentRef", "gaokao://canonical/paper-tj-2024/question/8");
+        assertThat(items.get(1)).containsEntry("transparentRef", "");
+    }
+
     @Test
     void physicalFileEvidenceRewritesBoundMarkdownImageWhenRootIdDiffers() throws Exception {
         String workerKey = "worker-secret";

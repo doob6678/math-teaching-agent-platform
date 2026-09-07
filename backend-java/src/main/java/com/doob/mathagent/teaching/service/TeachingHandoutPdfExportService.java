@@ -48,6 +48,14 @@ public class TeachingHandoutPdfExportService {
     private ModelLatexRepairClient latexRepairClient;
     /** 修复轮数上限；Java 不在此改写任何教学语义，只负责传输错误与再次真实编译。 */
     private int latexRepairRounds;
+    /** 授权题图物化通道；未注入（隔离测试）时 source-image 行按 fail-closed 处理，不进入 PDF。 */
+    private com.doob.mathagent.retrieval.CanonicalMathPaperAssetService canonicalAssetService;
+
+    /** Adds the canonical figure materialization path used to resolve Writer-retained source-image rows. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void configureCanonicalAssetService(com.doob.mathagent.retrieval.CanonicalMathPaperAssetService service) {
+        this.canonicalAssetService = service;
+    }
 
     /** Keeps direct unit construction deterministic while the Spring bean uses the same independent gate. */
     public TeachingHandoutPdfExportService() {
@@ -338,7 +346,108 @@ public class TeachingHandoutPdfExportService {
      * when the deterministic sanitizers could not save the document.
      */
     RenderedCompileResult compileLatex(TeachingTaskResponse task, String version) {
-        return compileWithModelRepair(task.taskId(), fullLatexDocument(task, version));
+        return compileWithModelRepair(task.taskId(), fullLatexDocument(resolveSourceImageRows(task), version));
+    }
+
+    /** source-image 行匹配：Java 签发的不透明别名 + 来源相对逻辑路径，行内不允许其他内容。 */
+    private static final Pattern SOURCE_IMAGE_ROW_LINE = Pattern.compile(
+            "^!\\[source-image:[A-Za-z0-9._:-]{1,120}]\\([^\\s()]+\\)$");
+
+    /**
+     * 编译前把 Writer 保留的 source-image 行解析为本地授权题图绝对路径（2026-09-07 双曲线零图片事故链路）。
+     * 绑定来源是任务证据账本行的 imageRefs（broker canonical 精读时写回）：
+     * 绑定命中且资产存在 → 重写目标为授权文件路径，走既有图片标记渲染通道；
+     * 绑定命中但文件缺失 → 原行保留，由渲染回退显示"图片未找到"，不伪造；
+     * 无绑定（别名被改写或未授权）→ 整行丢弃，fail-closed。
+     * 三种受众版本各自解析；未注入 canonical 资产服务时全部按无绑定丢弃。
+     */
+    private TeachingTaskResponse resolveSourceImageRows(TeachingTaskResponse task) {
+        if (task == null || task.evidence() == null) {
+            return task;
+        }
+        java.util.Map<String, com.doob.mathagent.teaching.TeachingEvidence> bindings =
+                new java.util.LinkedHashMap<>();
+        for (com.doob.mathagent.teaching.TeachingEvidence row : task.evidence()) {
+            if (row == null || row.imageRefs() == null) {
+                continue;
+            }
+            for (java.util.Map<String, String> ref : row.imageRefs()) {
+                String markdownLine = ref.get("markdownLine");
+                if (markdownLine != null && !markdownLine.isBlank()) {
+                    bindings.putIfAbsent(markdownLine.strip(), row);
+                }
+            }
+        }
+        TeachingTaskResponse resolved = task;
+        for (String version : List.of("teacher", "student", "lecture")) {
+            String latex = resolved.handoutLatexFor(version);
+            String rewritten = rewriteSourceImageRows(latex, bindings, resolved);
+            if (!rewritten.equals(latex)) {
+                resolved = resolved.withHandoutVersion(version, rewritten);
+            }
+        }
+        return resolved;
+    }
+
+    private String rewriteSourceImageRows(
+            String latex,
+            java.util.Map<String, com.doob.mathagent.teaching.TeachingEvidence> bindings,
+            TeachingTaskResponse task) {
+        if (latex == null || latex.isBlank() || !latex.contains("![source-image:")) {
+            return latex == null ? "" : latex;
+        }
+        com.doob.mathagent.infrastructure.security.RequestSubject subject =
+                new com.doob.mathagent.infrastructure.security.RequestSubject(
+                        task.tenantId(), task.subjectType(), task.subjectId(), "");
+        StringBuilder out = new StringBuilder(latex.length());
+        for (String line : latex.replace("\r\n", "\n").replace('\r', '\n').split("\n", -1)) {
+            if (!SOURCE_IMAGE_ROW_LINE.matcher(line.strip()).matches()) {
+                out.append(line).append('\n');
+                continue;
+            }
+            String trimmed = line.strip();
+            com.doob.mathagent.teaching.TeachingEvidence binding = bindings.get(trimmed);
+            if (binding == null || !"CANONICAL_MATH_PAPER".equals(binding.sourceScope())
+                    || binding.canonicalQuestionNumber().isBlank()) {
+                continue;
+            }
+            java.util.Optional<String> localPath = canonicalFigureFile(binding, trimmed, subject);
+            if (localPath.isEmpty()) {
+                // 绑定存在但文件缺失：保留原行，让渲染回退显示"图片未找到"，绝不静默伪造或借用他图。
+                out.append(trimmed).append('\n');
+                continue;
+            }
+            int targetStart = trimmed.lastIndexOf("](");
+            out.append(trimmed, 0, targetStart + 2).append(localPath.get()).append(")\n");
+        }
+        return out.toString().strip();
+    }
+
+    /** 每次导出都重新走 manifest 哈希与主体授权校验，防止旧账本绑定指向已变更的资产。 */
+    private java.util.Optional<String> canonicalFigureFile(
+            com.doob.mathagent.teaching.TeachingEvidence binding,
+            String markdownLine,
+            com.doob.mathagent.infrastructure.security.RequestSubject subject) {
+        if (canonicalAssetService == null) {
+            return java.util.Optional.empty();
+        }
+        for (java.util.Map<String, String> ref : binding.imageRefs()) {
+            if (!markdownLine.equals(ref.get("markdownLine"))) {
+                continue;
+            }
+            String logicalPath = ref.get("logicalPath");
+            if (logicalPath == null || logicalPath.isBlank()) {
+                return java.util.Optional.empty();
+            }
+            var asset = canonicalAssetService.openVisibleQuestionFigure(
+                    binding.sourceDocumentId(), binding.canonicalQuestionNumber(), logicalPath, subject);
+            if (asset.isEmpty()) {
+                return java.util.Optional.empty();
+            }
+            java.nio.file.Path file = asset.get().resource().getFile().toPath();
+            return java.util.Optional.of(file.toAbsolutePath().normalize().toString().replace('\\', '/'));
+        }
+        return java.util.Optional.empty();
     }
 
     /**
@@ -1347,7 +1456,9 @@ public class TeachingHandoutPdfExportService {
         }
 
         void drawImageCell(HandoutImage image, float left, float top, float width, float reservedHeight) throws IOException {
-            String caption = INLINE_FIGURE_TRANSPORT_ALT.equals(safeText(image.alt())) ? "" : safeText(image.alt());
+            // source-image 别名是 Java 签发的不透明传输标签，不得作为可见图注印进 PDF（与 LaTeX 渲染器同一约束）。
+            String alt = safeText(image.alt());
+            String caption = INLINE_FIGURE_TRANSPORT_ALT.equals(alt) || alt.startsWith("source-image:") ? "" : alt;
             List<String> captionLines = caption.isBlank() ? List.of() : wrap(caption, Math.max(12, Math.round(width / 7.4f)));
             float captionHeight = captionLines.isEmpty() ? 0f : captionLines.size() * IMAGE_CAPTION_SIZE * 1.35f + 4f;
             float imageAreaHeight = Math.max(72f, reservedHeight - captionHeight - 8f);

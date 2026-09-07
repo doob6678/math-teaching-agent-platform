@@ -187,6 +187,10 @@ public class AgentToolBrokerController {
         item.put("documentName", evidence.sourceTitle());
         item.put("documentRef", hasDocumentReferenceCandidate(evidence) && isContextEvidenceVisible(evidence, subject)
                 ? documentRef(runId, evidence.sourceDocumentId()) : "");
+        // transparentRef 携带来源域前缀（gaokao://、textbook://、feishu://）。Python 的 resource_curation 依赖
+        // gaokao:// 前缀自动补排 canonical_question_read：真题的 figures/ 图片行只有该单题精读通道能物化给 Writer，
+        // 缺少此字段时带题图的真题证据会以"无图可读"的形态静默进入写作，整份讲义零图片（2026-09-07 双曲线事故）。
+        item.put("transparentRef", transparentEvidenceReference(evidence));
         item.put("excerpt", imageContext.text());
         item.put("sourceRelativePath", evidence.sourcePath());
         item.put("imageRefs", imageContext.imageRefs());
@@ -317,9 +321,72 @@ public class AgentToolBrokerController {
                 request.runId(), visibleBlocks, subject, (documentId, logicalPath, viewer) -> canonicalAssetService != null
                         && canonicalAssetService.openVisibleQuestionFigure(
                         documentId, evidence.canonicalQuestionNumber(), logicalPath, viewer).isPresent());
+        persistCanonicalFigureBindings(request.runId(), evidence, rewrittenBlocks);
         List<Map<String, Object>> blocks = compactAlreadyRewrittenBlocks(request.runId(), rewrittenBlocks, maxBlocks, maxChars);
         auditHandoutInspection(request.runId(), "canonical-question-read", request.documentRef(), blocks.size());
         return Map.of("runId", request.runId(), "documentRef", request.documentRef(), "blocks", blocks);
+    }
+
+    /**
+     * 把 canonical 单题精读物化出的别名绑定（markdownLine + logicalPath）写回任务证据账本行。
+     * Writer 只会原样保留 source-image 行；导出端必须凭账本绑定反查授权题图文件，否则图片到得了
+     * Writer 却永远进不了 PDF（2026-09-07 双曲线零图片事故链路）。与 persistTeacherSearchEvidence
+     * 同一模式：Java 侧账本合并，不向 Python 暴露任何路径。
+     */
+    private void persistCanonicalFigureBindings(
+            String runId, TeachingEvidence evidence, List<TeacherDocumentBlockResponse> rewrittenBlocks) {
+        if (teachingTaskStore == null || evidence == null
+                || !"CANONICAL_MATH_PAPER".equals(evidence.sourceScope())) {
+            return;
+        }
+        List<Map<String, String>> bindings = rewrittenBlocks.stream()
+                .filter(java.util.Objects::nonNull)
+                .flatMap(block -> readImageRefs(uncheckedJson(block.imageRefs())).stream())
+                .toList();
+        if (bindings.isEmpty()) {
+            return;
+        }
+        TeachingTaskResponse task = teachingTaskStore.findByTaskId(runId).orElse(null);
+        if (task == null || task.evidence() == null || task.evidence().isEmpty()) {
+            return;
+        }
+        List<TeachingEvidence> merged = new java.util.ArrayList<>(task.evidence().size());
+        boolean changed = false;
+        for (TeachingEvidence row : task.evidence()) {
+            if (!changed && "CANONICAL_MATH_PAPER".equals(row.sourceScope())
+                    && row.sourceDocumentId().equals(evidence.sourceDocumentId())
+                    && row.canonicalQuestionNumber().equals(evidence.canonicalQuestionNumber())) {
+                merged.add(withMergedImageRefs(row, bindings));
+                changed = true;
+            } else {
+                merged.add(row);
+            }
+        }
+        if (!changed) {
+            return;
+        }
+        RequestSubject owner = subjectForHandoutRun(runId);
+        String ownerKey = owner.tenantId() + ":" + owner.subjectType() + ":" + owner.subjectId();
+        teachingTaskStore.save(ownerKey, ownerKey + ":" + task.clientRequestId(), task.withEvidence(merged));
+    }
+
+    /** 按 markdownLine 去重合并图片绑定；精读重放不得放大或丢失既有授权别名。 */
+    private static TeachingEvidence withMergedImageRefs(TeachingEvidence row, List<Map<String, String>> bindings) {
+        List<Map<String, String>> combined = new java.util.ArrayList<>(row.imageRefs());
+        java.util.Set<String> seen = new java.util.HashSet<>();
+        combined.forEach(ref -> seen.add(String.valueOf(ref.get("markdownLine"))));
+        for (Map<String, String> binding : bindings) {
+            if (seen.add(String.valueOf(binding.get("markdownLine")))) {
+                combined.add(binding);
+            }
+        }
+        if (combined.size() == row.imageRefs().size()) {
+            return row;
+        }
+        return new TeachingEvidence(row.sourceScope(), row.sourceTitle(), row.chunkId(), row.pageNo(),
+                row.snippet(), row.imagePath(), row.imageDescription(), row.sourceDocumentId(), row.sourceType(),
+                row.sourceUrl(), row.sourcePath(), row.assetIds(), row.canonicalQuestionNumber(),
+                List.copyOf(combined));
     }
     private boolean isContextEvidenceVisible(TeachingEvidence evidence, RequestSubject subject) {
         if (!hasDocumentReferenceCandidate(evidence)) {
@@ -495,7 +562,9 @@ public class AgentToolBrokerController {
             item.put("title", hit.documentTitle() == null ? "" : hit.documentTitle());
             item.put("documentName", hit.documentTitle() == null ? "" : hit.documentTitle());
             item.put("documentRef", documentRef(request.runId(), preferredFileDocumentId(hit)));
-            item.put("transparentRef", transparentFeishuSourceRef(hit));
+            // 与 handout-context 同一来源域标签：命中可能是真题或公开教材，统一按 evidence 实际 scope 生成，
+            // 不得再把所有命中一律标成 feishu://（否则 Python 无法识别 gaokao:// 并补排单题精读）。
+            item.put("transparentRef", transparentEvidenceReference(evidence));
             item.put("fileName", hit.fileName() == null ? "" : hit.fileName());
             item.put("excerpt", imageContext.text());
             item.put("imageRefs", imageContext.imageRefs());
@@ -718,7 +787,7 @@ public class AgentToolBrokerController {
     }
 
     private static String transparentEvidenceReference(TeachingEvidence evidence) {
-        if (evidence == null) return "";
+        if (evidence == null || evidence.sourceDocumentId().isBlank() || evidence.chunkId().isBlank()) return "";
         if ("PUBLIC_TEXTBOOK".equals(evidence.sourceScope())) {
             return "textbook://" + evidence.sourceDocumentId() + "/chunk/" + evidence.chunkId();
         }
@@ -727,6 +796,11 @@ public class AgentToolBrokerController {
                     + "/block/" + evidence.chunkId();
         }
         if ("CANONICAL_MATH_PAPER".equals(evidence.sourceScope())) {
+            // 缺题号的真题行无法走 canonical_question_read（Java 侧会以 404 拒绝并让 Python 抛错终止运行），
+            // 因此宁可不发 gaokao:// 信号，也不得让 Python 自动补排一个必然失败的精读。
+            if (evidence.canonicalQuestionNumber().isBlank()) {
+                return "";
+            }
             return "gaokao://canonical/" + evidence.sourceDocumentId()
                     + "/question/" + evidence.canonicalQuestionNumber();
         }
@@ -826,15 +900,6 @@ public class AgentToolBrokerController {
             return hit.fileDocumentId().strip();
         }
         return hit.documentId() == null ? "" : hit.documentId().strip();
-    }
-
-    private String transparentFeishuSourceRef(TeacherResourceBlockSearchResponse.Hit hit) {
-        String documentId = preferredFileDocumentId(hit);
-        String blockId = hit.blockId() == null ? "" : hit.blockId().strip();
-        if (documentId.isBlank() || blockId.isBlank()) {
-            return "";
-        }
-        return "feishu://group/TEACHER_SHARED/resource/" + documentId + "/block/" + blockId;
     }
 
     private void persistTeacherSearchEvidence(

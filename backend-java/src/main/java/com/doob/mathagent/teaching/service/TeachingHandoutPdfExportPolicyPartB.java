@@ -320,7 +320,9 @@ final class TeachingHandoutPdfExportPolicyPartB {
 
     static String renderLatexImageCell(HandoutImage image, String width, String maxHeight) {
         Optional<Path> localPath = existingLocalImagePath(image.path());
-        String caption = INLINE_FIGURE_TRANSPORT_ALT.equals(safeText(image.alt())) ? "" : safeText(image.alt());
+        // source-image 别名是 Java 签发的不透明传输标签，只对导出解析有意义，不得作为可见图注印进 PDF。
+        String alt = safeText(image.alt());
+        String caption = INLINE_FIGURE_TRANSPORT_ALT.equals(alt) || alt.startsWith("source-image:") ? "" : alt;
         StringBuilder builder = new StringBuilder();
         if (localPath.isEmpty()) {
             return "";

@@ -247,7 +247,8 @@ final class TeachingWorkflowCorePolicy {
 
     /**
      * 将受信任 Writer 的 Markdown 结构映射为通用 LaTeX；不会补全、重排或推断正文语义。
-     * 图片 Markdown 在尚无不透明证据关联契约时不进入 PDF，避免将路径或未授权资源带入发布物。
+     * 仅 Java 签发的 ![source-image:...] 行原样保留（导出端按账本绑定物化授权题图）；
+     * 其余图片 Markdown（路径、URL、base64）不进入 PDF，避免把未授权资源带入发布物。
      */
     static String renderWriterMarkdown(String markdown, boolean teacherVersion) {
         String source = markdown == null ? "" : markdown.replace("\r\n", "\n").replace('\r', '\n').strip();
@@ -261,6 +262,13 @@ final class TeachingWorkflowCorePolicy {
             String line = rawLine.strip();
             if (line.matches("!\\[[^]]*]\\([^)]*\\)")) {
                 flushMarkdownList(rendered, listItems, orderedList);
+                // source-image 行是 Java 签发、Writer 原样保留的图片选择信号，必须进入发布正文；
+                // 导出端按任务账本 imageRefs 绑定解析授权题图（2026-09-07 双曲线零图片事故：此前所有图片行
+                // 在此被无条件丢弃，canonical 精读物化的 figures 行永远到不了 PDF）。其余图片行（绝对路径、
+                // URL、base64）仍按 fail-closed 丢弃，不得把未授权资源带入发布物。
+                if (line.startsWith("![source-image:")) {
+                    rendered.append(line).append('\n');
+                }
                 continue;
             }
             Matcher heading = Pattern.compile("^(#{1,6})\\s+(.+?)\\s*$").matcher(line);
