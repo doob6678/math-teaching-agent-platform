@@ -111,7 +111,7 @@
 
 - 现象：椭圆任务 teacherHandoutLatex 有 3 行 source-image、账本别名指纹（`sha256(runId|documentId)[:12]`）与 canonical 行一一对应，但账本 `imageRefs=[]`、导出 fail-closed 丢图。
 - 根因：broker 精读把绑定写回 teaching_task 后，编排器的进度快照由**运行开始时构建的内存 evidence**（不含绑定）反复 `saveOwnedRunning` 覆盖账本。双曲线任务因 retry 从 DB 重载 checkpoint 才侥幸存活——绑定存活与否纯看时序，系统性脆弱。
-- 修复：`MyBatisTeachingTaskStore` 全部更新写路径（save 更新分支/saveOwnedRunning/completeOwned/failOwned/prepareForResume）写库前从已持久化快照按证据身份（scope+docId+chunkId+题号）结转 imageRefs 绑定。回归：`MyBatisTeachingTaskStoreTest` 3 绿（含新结转用例）。
+- 修复：`MyBatisTeachingTaskStore` 全部更新写路径（save 更新分支/saveOwnedRunning/completeOwned/failOwned/prepareForResume）写库前从已持久化快照按证据身份（scope+docId+chunkId+题号）结转 broker 后写增量——`imageRefs` 与 `assetIds`（同一覆盖模式下资产身份同样会丢，2026-09-07 深夜老板确认后一并纳入）。回归：`MyBatisTeachingTaskStoreTest` 3 绿（结转用例同时断言两类增量）。
 
 ## 二、LaTeX 修复通道两处失灵（abb2d23e 导出落 recovery-stub 的根因）
 

@@ -121,8 +121,14 @@ class MyBatisTeachingTaskStoreTest {
         List<Map<String, String>> bindings = List.of(Map.of(
                 "markdownLine", "![source-image:e3bf1957645d-image-001](figures/q-016-01.png)",
                 "logicalPath", "figures/q-016-01.png"));
-        TeachingTaskResponse persisted = runningTask().withEvidence(
-                List.of(canonicalEvidence("doc-16", "16", bindings)));
+        // 持久化行同时携带 broker 后写的 assetIds：进度快照必须两者都结转，不得只保 imageRefs。
+        TeachingEvidence durableRow = canonicalEvidence("doc-16", "16", bindings);
+        TeachingTaskResponse persisted = runningTask().withEvidence(List.of(new TeachingEvidence(
+                durableRow.sourceScope(), durableRow.sourceTitle(), durableRow.chunkId(), durableRow.pageNo(),
+                durableRow.snippet(), durableRow.imagePath(), durableRow.imageDescription(),
+                durableRow.sourceDocumentId(), durableRow.sourceType(), durableRow.sourceUrl(),
+                durableRow.sourcePath(), List.of("asset-77"), durableRow.canonicalQuestionNumber(),
+                durableRow.imageRefs())));
         TeachingTaskEntity existing = new TeachingTaskEntity();
         existing.setTaskId("task-failed");
         existing.setResponseJson(objectMapper.writeValueAsString(persisted));
@@ -152,6 +158,7 @@ class MyBatisTeachingTaskStoreTest {
         TeachingTaskResponse written = objectMapper.readValue(
                 (String) capturedArguments.get()[2], TeachingTaskResponse.class);
         assertThat(written.evidence().get(0).imageRefs()).isEqualTo(bindings);
+        assertThat(written.evidence().get(0).assetIds()).containsExactly("asset-77");
     }
 
     private static TeachingEvidence canonicalEvidence(

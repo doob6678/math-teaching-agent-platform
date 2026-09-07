@@ -233,9 +233,9 @@ public class MyBatisTeachingTaskStore implements TeachingTaskStore {
     }
 
     /**
-     * Broker canonical 精读会把题图授权绑定（imageRefs）写回持久化账本，而编排器的进度快照由运行开始时的
-     * 内存 evidence 构建、不含这些绑定；不结转的话精读之后的任何一次保存都会抹掉绑定，导出端按账本反查
-     * 失败即 fail-closed 丢图（2026-09-07 椭圆任务 LaTeX 有图行但 PDF 无图事故）。
+     * Broker canonical 精读会把题图授权绑定（imageRefs）、教师资源搜索会把资产身份（assetIds）写回持久化
+     * 账本，而编排器的进度快照由运行开始时的内存 evidence 构建、不含这些后写增量；不结转的话之后的任何一次
+     * 保存都会抹掉它们，导出端反查失败即 fail-closed 丢图（2026-09-07 椭圆任务 LaTeX 有图行但 PDF 无图事故）。
      */
     private TeachingTaskResponse carryDurableImageBindings(TeachingTaskEntity existing, TeachingTaskResponse task) {
         if (existing == null || existing.getResponseJson() == null || existing.getResponseJson().isBlank()
@@ -249,11 +249,12 @@ public class MyBatisTeachingTaskStore implements TeachingTaskStore {
             // 历史快照损坏不能阻塞本次保存；绑定结转尽力而为。
             return task;
         }
-        Map<String, List<Map<String, String>>> durableBindings = new HashMap<>();
+        Map<String, TeachingEvidence> durableBindings = new HashMap<>();
         for (TeachingEvidence row : persisted.evidence() == null
                 ? List.<TeachingEvidence>of() : persisted.evidence()) {
-            if (!row.imageRefs().isEmpty()) {
-                durableBindings.put(evidenceIdentityKey(row), row.imageRefs());
+            // 只有携带后写增量（绑定或资产身份）的行才值得结转；空行不建条目，避免无谓重建。
+            if (!row.imageRefs().isEmpty() || !row.assetIds().isEmpty()) {
+                durableBindings.putIfAbsent(evidenceIdentityKey(row), row);
             }
         }
         if (durableBindings.isEmpty()) {
@@ -262,18 +263,25 @@ public class MyBatisTeachingTaskStore implements TeachingTaskStore {
         List<TeachingEvidence> merged = new ArrayList<>(task.evidence().size());
         boolean changed = false;
         for (TeachingEvidence row : task.evidence()) {
-            List<Map<String, String>> durable = durableBindings.get(evidenceIdentityKey(row));
-            if (durable == null || row.imageRefs().containsAll(durable)) {
+            TeachingEvidence durable = durableBindings.get(evidenceIdentityKey(row));
+            if (durable == null
+                    || (row.imageRefs().containsAll(durable.imageRefs()) && row.assetIds().containsAll(durable.assetIds()))) {
                 merged.add(row);
                 continue;
             }
-            List<Map<String, String>> combined = new ArrayList<>(row.imageRefs());
-            for (Map<String, String> ref : durable) {
-                if (!combined.contains(ref)) {
-                    combined.add(ref);
+            List<Map<String, String>> combinedRefs = new ArrayList<>(row.imageRefs());
+            for (Map<String, String> ref : durable.imageRefs()) {
+                if (!combinedRefs.contains(ref)) {
+                    combinedRefs.add(ref);
                 }
             }
-            merged.add(withImageRefs(row, combined));
+            List<String> combinedAssets = new ArrayList<>(row.assetIds());
+            for (String assetId : durable.assetIds()) {
+                if (!combinedAssets.contains(assetId)) {
+                    combinedAssets.add(assetId);
+                }
+            }
+            merged.add(withCarriedBindings(row, combinedRefs, combinedAssets));
             changed = true;
         }
         return changed ? task.withEvidence(List.copyOf(merged)) : task;
@@ -285,9 +293,11 @@ public class MyBatisTeachingTaskStore implements TeachingTaskStore {
                 + '\0' + row.canonicalQuestionNumber();
     }
 
-    private static TeachingEvidence withImageRefs(TeachingEvidence row, List<Map<String, String>> refs) {
+    private static TeachingEvidence withCarriedBindings(
+            TeachingEvidence row, List<Map<String, String>> refs, List<String> assetIds) {
         return new TeachingEvidence(row.sourceScope(), row.sourceTitle(), row.chunkId(), row.pageNo(),
                 row.snippet(), row.imagePath(), row.imageDescription(), row.sourceDocumentId(), row.sourceType(),
-                row.sourceUrl(), row.sourcePath(), row.assetIds(), row.canonicalQuestionNumber(), List.copyOf(refs));
+                row.sourceUrl(), row.sourcePath(), List.copyOf(assetIds), row.canonicalQuestionNumber(),
+                List.copyOf(refs));
     }
 }
