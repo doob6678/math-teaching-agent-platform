@@ -27,7 +27,9 @@ class EmbeddingProviderError(RuntimeError):
 
 
 RETRIEVAL_READINESS_PROBE = "retrieval readiness"
-DEFAULT_RETRIEVAL_READINESS_TIMEOUT_SECONDS = 120.0
+# 2026-09-06：实测 BGE+reranker 就绪约 80s，CLIP 双塔预热纳入 readiness 后预算放宽到 240s；
+# compose worker healthcheck（start_period 60s + 20×15s）覆盖该窗口，不会误判失败。
+DEFAULT_RETRIEVAL_READINESS_TIMEOUT_SECONDS = 240.0
 
 
 def require_cuda_device(torch, configured_device: str):
@@ -221,6 +223,13 @@ class LocalBertVocabTokenizer:
         return tokens
 
 
+# 1x1 纯红 PNG（zlib 现场生成的合法最小图，非占位假数据）：仅供 CLIP 启动预热跑一次真实推理，
+# 让 CUDA kernel 与显存分配在 readiness 阶段完成，首条带图对话不再为模型加载付 TTFT（老板 2026-09-06）。
+_WARMUP_IMAGE_DATA_URL = (
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC"
+)
+
+
 class LocalClipBackend:
     def __init__(self, settings: WorkerSettings):
         self.settings = settings
@@ -271,6 +280,16 @@ class LocalClipBackend:
             "textEmbedding": text_status,
             "imageEmbedding": image_status,
         }
+
+    def warmup(self) -> None:
+        """Loads both CLIP towers and runs one bounded real inference each during worker readiness.
+
+        未配置 CLIP 路径的部署跳过（该能力可选，不阻塞启动）；已配置但加载失败必须抛出，
+        让 readiness 如实反映 GPU/权重问题，而不是留到首条相似题图请求里超时。"""
+        if not self.settings.local_clip_model_path:
+            return
+        self.embed_text(["warmup"])
+        self.embed_images([_WARMUP_IMAGE_DATA_URL])
 
     def embed_text(self, texts: list[str], dimensions: int | None = None) -> EmbeddingResult:
         if not texts:
@@ -940,6 +959,8 @@ class EmbeddingService:
                 return
             self.local_text_embedding_backend.verify_gpu_readiness()
             self.local_rerank_backend.verify_gpu_readiness()
+            # CLIP 双塔也纳入 readiness：教材"文字搜图/相似题图"首查不再付模型加载时间。
+            self.local_clip_backend.warmup()
             self._retrieval_ready = True
 
     def is_retrieval_ready(self) -> bool:

@@ -23,5 +23,9 @@ export default defineConfig({
   },
   test: {
     setupFiles: ["./src/test/setup.ts"],
+    // 修复原因：e2e/ 是 Playwright 规格（playwright test 专属收集），vitest 默认
+    // include **/*.spec.ts 会把它们收进来并因 test.describe() 环境不符报收集错误；
+    // 显式排除，单测与 UI 自动化各走各的运行器。
+    exclude: ["**/node_modules/**", "**/dist/**", "e2e/**"],
   },
 });

@@ -113,6 +113,28 @@ def build_messages_payload(openai_payload: dict[str, Any]) -> dict[str, Any]:
                 "content": str(content if content is not None else ""),
             }]})
             continue
+        if isinstance(content, list):
+            # OpenAI 多模态 content 部件必须映射成 Anthropic 块。此前 str() 拍平会把 image_url
+            # 变成 repr 文本（2026-09-06 探针：glm-5.3-flash 原生 image 块实测能看图，桥接却返回空），
+            # 视觉信息在传输层被静默销毁。data URL 解出 media_type+base64；http(s) 用 url source。
+            blocks = []
+            for part in content:
+                if not isinstance(part, dict):
+                    continue
+                part_type = str(part.get("type") or "")
+                if part_type == "text" and part.get("text"):
+                    blocks.append({"type": "text", "text": str(part["text"])})
+                elif part_type == "image_url":
+                    url = str((part.get("image_url") or {}).get("url") or "")
+                    if url.startswith("data:"):
+                        header, _, data = url.partition(",")
+                        media_type = header[5:].split(";")[0] or "image/png"
+                        blocks.append({"type": "image", "source": {
+                            "type": "base64", "media_type": media_type, "data": data}})
+                    elif url.startswith("http://") or url.startswith("https://"):
+                        blocks.append({"type": "image", "source": {"type": "url", "url": url}})
+            anthropic_messages.append({"role": "user", "content": blocks or ""})
+            continue
         anthropic_messages.append({"role": "user", "content": str(content if content is not None else "")})
 
     tools = []

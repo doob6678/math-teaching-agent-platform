@@ -151,7 +151,9 @@ services:
       # GLM 走 Z.ai 的 Anthropic 兼容端点，由 anthropic_compat 适配层转换；凭据只进 worker。
       GLM_API_KEY: ${GLM_API_KEY:-}
       GLM_BASE_URL: ${GLM_BASE_URL:-https://api.z.ai/api/anthropic}
-      GLM_CHAT_MODEL: ${GLM_CHAT_MODEL:-glm-5.3-flash}
+      # 2026-09-08 老板书面指令：学生问答默认模型 glm-5.3-flash（原话强调"注意 flash"）。
+      # worker 与下方 backend 两处必须写一致，route 元数据要与实调模型对齐。
+      GLM_CHAT_MODEL: glm-5.3-flash
       # glm-5.3-flash 强制思考且与 temperature 互斥；弱思考档位与思考预算下限由部署显式声明。
       MATH_AGENT_GLM_THINKING_EFFORT: ${MATH_AGENT_GLM_THINKING_EFFORT:-low}
       MATH_AGENT_GLM_MIN_MAX_TOKENS: ${MATH_AGENT_GLM_MIN_MAX_TOKENS:-2048}
@@ -265,7 +267,11 @@ services:
       # Grants remain run/workload/signed and must cover the durable 40-minute handout lease plus handoff time.
       MATH_AGENT_PROVIDER_ROUTE_GRANT_TTL_SECONDS: ${MATH_AGENT_PROVIDER_ROUTE_GRANT_TTL_SECONDS:-2700}
       # The selected provider is route metadata only; credentials remain confined to ai-worker.
-      MATH_AGENT_AI_DEFAULT_PROVIDER: ${MATH_AGENT_AI_DEFAULT_PROVIDER:-deepseek}
+      # 2026-09-08：默认路由切 glm（默认模型 glm-5.3-flash，见本文件两处 GLM_CHAT_MODEL 硬编码）——
+      # 实测 deepseek-v4-flash 的 reasoning_content 偶发 token-salad（传输层字节干净，模型自身输出
+      # 不可读），叠加 worker durable 合并丢 reasoning 后学生端"思考"面板呈碎片乱码；
+      # deepseek 仍 enabled，只是从 primary 降为 fallback（见 application.yml 同日期注释）。
+      MATH_AGENT_AI_DEFAULT_PROVIDER: ${MATH_AGENT_AI_DEFAULT_PROVIDER:-glm}
       MATH_AGENT_PROVIDER_OPENAI_ENABLED: ${MATH_AGENT_PROVIDER_OPENAI_ENABLED:-true}
       MATH_AGENT_PROVIDER_DASHSCOPE_ENABLED: ${MATH_AGENT_PROVIDER_DASHSCOPE_ENABLED:-false}
       MATH_AGENT_PROVIDER_DEEPSEEK_ENABLED: ${MATH_AGENT_PROVIDER_DEEPSEEK_ENABLED:-true}
@@ -273,7 +279,8 @@ services:
       MATH_AGENT_PROVIDER_GLM_ENABLED: ${MATH_AGENT_PROVIDER_GLM_ENABLED:-true}
       # Route metadata must match the worker model, while its endpoint and API key stay worker-only.
       OPENAI_CHAT_MODEL: ${OPENAI_CHAT_MODEL:-gpt-5.6-luna}
-      GLM_CHAT_MODEL: ${GLM_CHAT_MODEL:-glm-5.3-flash}
+      # 与上方 ai-worker 同值硬编码（2026-09-08：默认 glm-5.3-flash，老板书面指令）。
+      GLM_CHAT_MODEL: glm-5.3-flash
       MATH_AGENT_PYTHON_HANDOUT_ENABLED: ${MATH_AGENT_PYTHON_HANDOUT_ENABLED:-true}
       MATH_AGENT_PYTHON_HANDOUT_BASE_URL: http://ai-worker:8091
       MATH_AGENT_PYTHON_HANDOUT_GRAPH_VERSION: ${MATH_AGENT_PYTHON_HANDOUT_GRAPH_VERSION:-handout-v2}

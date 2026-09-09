@@ -1,0 +1,38 @@
+\documentclass{article}
+\usepackage[margin=2.4cm]{geometry}
+\usepackage{fontspec}
+\usepackage{xeCJK}
+\usepackage{xcolor}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{caption}
+\usepackage{enumitem}
+\usepackage{fancyhdr}
+\usepackage{lastpage}
+\usepackage{titlesec}
+\usepackage{needspace}
+\let\MathAgentOriginalVec\vec
+\renewcommand{\vec}[1]{\ensuremath{\MathAgentOriginalVec{#1}}}
+\let\MathAgentOriginalOverrightarrow\overrightarrow
+\renewcommand{\overrightarrow}[1]{\ensuremath{\MathAgentOriginalOverrightarrow{#1}}}
+\let\MathAgentOriginalFrac\frac
+\renewcommand{\frac}[2]{\ensuremath{\MathAgentOriginalFrac{#1}{#2}}}
+\let\MathAgentOriginalTimes\times
+\renewcommand{\times}{\ensuremath{\MathAgentOriginalTimes}}
+\IfFontExistsTF{Noto Sans CJK SC}{\setCJKmainfont{Noto Sans CJK SC}}{\IfFontExistsTF{Noto Sans SC}{\setCJKmainfont{Noto Sans SC}}{\IfFontExistsTF{Microsoft YaHei UI}{\setCJKmainfont{Microsoft YaHei UI}}{\IfFontExistsTF{SimSun}{\setCJKmainfont{SimSun}}{}}}}
+\IfFontExistsTF{Noto Sans CJK SC}{\setCJKsansfont{Noto Sans CJK SC}}{\IfFontExistsTF{Noto Sans SC}{\setCJKsansfont{Noto Sans SC}}{\IfFontExistsTF{Microsoft YaHei UI}{\setCJKsansfont{Microsoft YaHei UI}}{}}}
+\IfFontExistsTF{Noto Serif CJK SC}{\newCJKfontfamily\HandoutDisplayFont{Noto Serif CJK SC}}{\IfFontExistsTF{Noto Serif SC}{\newCJKfontfamily\HandoutDisplayFont{Noto Serif SC}}{\newcommand{\HandoutDisplayFont}{}}}
+\IfFontExistsTF{Arial}{\setmainfont{Arial}}{}
+\setlength{\parindent}{0pt}
+
+\begin{document}
+\section{AI 直播写入}
+这是 AI 写讲义时推送的第一个片段，公式 $x^2+1$。
+
+\section{第二段}
+AI 又追加了一段，带表格：
+\begin{tabular}{|c|c|}\hline 题号 & 得分 \\ \hline 1 & 10 \\ \hline\end{tabular}
+
+\section{第三段（AI 刚追加）}
+老板不用刷新页面，这段会自动出现在右侧。
+\end{document}

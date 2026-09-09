@@ -1,0 +1,311 @@
+{
+  "schema": "lesson-plan/v1",
+  "id": "ellipse-moving-line",
+  "title": "一题一课 · 椭圆与动直线恒成立（2024 天津卷 T18）",
+  "problem": {
+    "stem": "已知椭圆 $C:\\frac{x^2}{a^2}+\\frac{y^2}{b^2}=1$ $(a>b>0)$ 的离心率为 $\\frac{1}{2}$，左顶点为 $A$，下顶点为 $B$，$C$ 是 $OB$ 的中点，$\\triangle ABC$ 的面积为 $\\frac{3\\sqrt{3}}{2}$。(2) 过点 $(0,-\\frac{3}{2})$ 的直线与椭圆交于 $P$、$Q$，$y$ 轴上是否存在定点 $T$，使 $\\overrightarrow{TP}\\cdot\\overrightarrow{TQ}\\le 0$ 恒成立？",
+    "known": [
+      "离心率 $e=\\frac{1}{2}$",
+      "$C$ 是 $OB$ 中点，$S_{\\triangle ABC}=\\frac{3\\sqrt{3}}{2}$",
+      "动直线过定点 $(0,-\\frac{3}{2})$"
+    ],
+    "goal": "求椭圆方程，并判断 $y$ 轴上满足 $\\overrightarrow{TP}\\cdot\\overrightarrow{TQ}\\le 0$ 恒成立的 $T$ 的范围",
+    "core_observation": "$e=\\frac{1}{2}$ 定形状（$a=2c$，$b=\\sqrt{3}c$），面积定大小（$\\frac{ab}{4}=\\frac{3\\sqrt{3}}{2}$）；$\\overrightarrow{TP}\\cdot\\overrightarrow{TQ}\\le 0$ 即 $\\angle PTQ$ 不小于直角，$T$ 在以 $PQ$ 为直径的圆内。",
+    "answer": "(1) $\\frac{x^2}{12}+\\frac{y^2}{9}=1$；(2) 存在，$t\\in[-3,\\frac{3}{2}]$"
+  },
+  "view": {
+    "x": [
+      -4.8,
+      4.8
+    ],
+    "y": [
+      -3.9,
+      3.9
+    ],
+    "axes": true,
+    "ticks": {}
+  },
+  "objects": {
+    "ellTop": {
+      "type": "function",
+      "expr": "3*sqrt(1-x**2/12)",
+      "x": [
+        -3.4641,
+        3.4641
+      ]
+    },
+    "ellBot": {
+      "type": "function",
+      "expr": "-3*sqrt(1-x**2/12)",
+      "x": [
+        -3.4641,
+        3.4641
+      ]
+    },
+    "A": {
+      "type": "point",
+      "at": [
+        -3.4641,
+        0
+      ],
+      "label": "A"
+    },
+    "B": {
+      "type": "point",
+      "at": [
+        0,
+        -3
+      ],
+      "label": "B"
+    },
+    "C": {
+      "type": "point",
+      "at": [
+        0,
+        -1.5
+      ],
+      "label": "C"
+    },
+    "T": {
+      "type": "point",
+      "at": [
+        0,
+        0
+      ],
+      "label": "T"
+    },
+    "segAB": {
+      "type": "segment",
+      "from": "A",
+      "to": "B",
+      "style": "aux"
+    },
+    "segAC": {
+      "type": "segment",
+      "from": "A",
+      "to": "C",
+      "style": "aux"
+    },
+    "Pdot": {
+      "type": "point",
+      "at": [
+        0,
+        3
+      ],
+      "style": "hl"
+    },
+    "Qdot": {
+      "type": "point",
+      "at": [
+        0,
+        -3
+      ],
+      "style": "hl"
+    },
+    "segTP": {
+      "type": "segment",
+      "from": "T",
+      "to": "Pdot",
+      "style": "hl",
+      "dashed": true
+    },
+    "segTQ": {
+      "type": "segment",
+      "from": "T",
+      "to": "Qdot",
+      "style": "hl",
+      "dashed": true
+    }
+  },
+  "chapters": [
+    {
+      "id": "ch1",
+      "title": "题目呈现",
+      "subtitle": "离心率与面积双条件定椭圆",
+      "narration": "来看 2024 年天津卷这道解析几何大题。椭圆离心率二分之一，左顶点 A，下顶点 B，C 是 OB 的中点，三角形 ABC 的面积为二分之三倍根号三。第二问还有一条过定点的动直线。",
+      "steps": [
+        {
+          "op": "draw",
+          "ref": "ellTop"
+        },
+        {
+          "op": "draw",
+          "ref": "ellBot"
+        },
+        {
+          "op": "label",
+          "ref": "A",
+          "offset": [
+            -0.4,
+            0.3
+          ]
+        },
+        {
+          "op": "label",
+          "ref": "B",
+          "offset": [
+            0.3,
+            -0.4
+          ]
+        },
+        {
+          "op": "caption",
+          "text": "$e=\\frac{1}{2}$，$S_{\\triangle ABC}=\\frac{3\\sqrt{3}}{2}$，求椭圆方程"
+        }
+      ]
+    },
+    {
+      "id": "ch2",
+      "title": "离心率定形状",
+      "subtitle": "a、b、c 的比例关系",
+      "narration": "离心率决定形状。e 等于 c 比 a 等于二分之一，所以 a 等于二 c；于是 b 等于根号下 a 方减 c 方，等于根号三乘 c。三者的比例锁定。",
+      "steps": [
+        {
+          "op": "caption",
+          "text": "$e=\\frac{c}{a}=\\frac{1}{2}$ → $a=2c$，$b=\\sqrt{3}c$"
+        },
+        {
+          "op": "note",
+          "kind": "formula",
+          "text": "e=\\frac{c}{a}=\\frac{1}{2} \\Rightarrow a=2c,\\ b=\\sqrt{3}c"
+        }
+      ]
+    },
+    {
+      "id": "ch3",
+      "title": "面积定大小",
+      "subtitle": "以 BC 为底的三角形",
+      "narration": "面积决定大小。以 BC 为底，长度二分之 b，高就是 a，面积等于四分之 ab，等于二分之三倍根号三。解出 c 方等于三，椭圆方程为十二分之 x 方加九分之 y 方等于一。",
+      "steps": [
+        {
+          "op": "show",
+          "ref": "C"
+        },
+        {
+          "op": "label",
+          "ref": "C",
+          "offset": [
+            0.3,
+            -0.15
+          ]
+        },
+        {
+          "op": "draw",
+          "ref": "segAB"
+        },
+        {
+          "op": "draw",
+          "ref": "segAC"
+        },
+        {
+          "op": "caption",
+          "text": "$S=\\frac{1}{2}\\cdot\\frac{b}{2}\\cdot a=\\frac{ab}{4}=\\frac{3\\sqrt{3}}{2}$"
+        },
+        {
+          "op": "note",
+          "kind": "formula",
+          "text": "\\frac{ab}{4}=\\frac{3\\sqrt3}{2} \\Rightarrow c^2=3,\\ a^2=12,\\ b^2=9"
+        },
+        {
+          "op": "note",
+          "kind": "formula",
+          "text": "\\frac{x^2}{12}+\\frac{y^2}{9}=1"
+        }
+      ]
+    },
+    {
+      "id": "ch4",
+      "title": "动直线演示",
+      "subtitle": "TP·TQ ≤ 0 恒成立？",
+      "narration": "第二问，动直线恰好过 C 点零逗负二分之三。让它绕 C 旋转，交椭圆于 P、Q 两点。问 y 轴上是否存在定点 T，使得向量 TP 点乘 TQ 恒不大于零。几何上，就是角 PTQ 不小于直角，T 始终落在以 PQ 为直径的圆内。",
+      "steps": [
+        {
+          "op": "show",
+          "ref": "T"
+        },
+        {
+          "op": "label",
+          "ref": "T",
+          "offset": [
+            0.3,
+            0.15
+          ]
+        },
+        {
+          "op": "draw",
+          "ref": "segTP"
+        },
+        {
+          "op": "draw",
+          "ref": "segTQ"
+        },
+        {
+          "op": "caption",
+          "text": "让直线绕定点 $(0,-\\frac{3}{2})$ 旋转，观察 $\\angle PTQ$"
+        },
+        {
+          "op": "trace_line",
+          "pivot": [
+            0,
+            -1.5
+          ],
+          "conic": {
+            "a": 3.4641,
+            "b": 3,
+            "center": [
+              0,
+              0
+            ]
+          },
+          "from_deg": 50,
+          "to_deg": 130,
+          "line": "dynL",
+          "extend": 4.6,
+          "points": {
+            "P": "Pdot",
+            "Q": "Qdot"
+          },
+          "labels": {
+            "Pdot": "P",
+            "Qdot": "Q"
+          },
+          "label_offsets": {
+            "Pdot": [
+              0.3,
+              0.25
+            ],
+            "Qdot": [
+              0.3,
+              -0.4
+            ]
+          },
+          "links": [
+            "segTP",
+            "segTQ"
+          ],
+          "run_time": 6.5
+        }
+      ]
+    },
+    {
+      "id": "ch5",
+      "title": "结论",
+      "subtitle": "直径圆内判定，落定范围",
+      "narration": "把点乘条件翻译成 T 在以 PQ 为直径的圆内，对一切实线恒成立，解得 t 的范围是负三到二分之三。存在这样的 T，答案落定。",
+      "steps": [
+        {
+          "op": "caption",
+          "text": "$TP\\cdot TQ\\le 0$ 恒成立，当且仅当 $T$ 在以 $PQ$ 为直径的圆内"
+        },
+        {
+          "op": "note",
+          "text": "对一切实线恒成立 → $t$ 的范围"
+        },
+        {
+          "op": "answer",
+          "text": "-3 \\le t \\le \\frac{3}{2}"
+        }
+      ]
+    }
+  ]
+}

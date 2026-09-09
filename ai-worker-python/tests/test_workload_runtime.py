@@ -240,6 +240,57 @@ class MigratedWorkloadContractTest(unittest.TestCase):
         self.assertEqual(json.loads(messages[2]["content"]), {"observation": "观察一"})
         self.assertEqual(json.loads(messages[3]["content"]), {"observation": "观察二"})
 
+    def test_react_accepts_search_similar_figures_tool(self):
+        # 相似题图工具必须进 availableTools Literal：请求校验通过、规划器保留该工具并下发非空能力描述，
+        # 这样 Java 在学生带图轮次签发后，模型才能据此主动调用（allow-list 仍以 Java 为准）。
+        base = {
+            "runId": "explanation-similar-figures-1",
+            "mode": "react",
+            "problem": "这个图在教材里出现过吗，找相似题图",
+            "availableTools": ["search_textbook", "search_similar_figures"],
+            "evidence": [],
+            "observations": [],
+            "providerRoute": self.route(),
+        }
+        request = StudentExplanationRunRequest.model_validate(base)
+        self.assertIn("search_similar_figures", request.availableTools)
+        messages = MigratedWorkloadRuntime._react_planner_messages(request, request.availableTools)
+        catalog = json.loads(messages[1]["content"])["availableTools"]  # 无图时 base user 仍是 JSON 文本
+        self.assertIn("search_similar_figures", [t["name"] for t in catalog])
+        self.assertTrue(next(t for t in catalog if t["name"] == "search_similar_figures")["description"])
+        with patch("app.workload_runtime.MigratedWorkloadRuntime._call_json", return_value=(
+            '{"decision":"action","tools":["search_similar_figures"],"queries":["相似题图"]}',
+            type("Result", (), {"provider": "openai", "model": "m",
+                                "usage": lambda self: {"promptTokens": 5, "completionTokens": 6,
+                                                        "totalTokens": 11, "estimatedCost": -1.0}})(),
+        )):
+            response = self.client.post(
+                "/v1/student-explanations/sync",
+                headers={"Authorization": "Bearer worker-test-key"},
+                json={**base, "imageDataUrl": "data:image/png;base64,AAAA"},
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["tools"], ["search_similar_figures"])
+
+    def test_react_drops_similar_figures_when_not_authorized(self):
+        # Java 未签发该工具时，即便模型幻觉调用也必须在 Python 侧按 availableTools 过滤掉（退化为 final）。
+        base = {
+            "runId": "explanation-similar-figures-2", "mode": "react", "problem": "随便问一句",
+            "availableTools": ["search_textbook"], "evidence": [], "observations": [],
+            "providerRoute": self.route(),
+        }
+        with patch("app.workload_runtime.MigratedWorkloadRuntime._call_json", return_value=(
+            '{"decision":"action","tools":["search_similar_figures"],"queries":["x"]}',
+            type("Result", (), {"provider": "openai", "model": "m",
+                                "usage": lambda self: {"promptTokens": 1, "completionTokens": 1,
+                                                        "totalTokens": 2, "estimatedCost": -1.0}})(),
+        )):
+            response = self.client.post(
+                "/v1/student-explanations/sync",
+                headers={"Authorization": "Bearer worker-test-key"}, json=base)
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("search_similar_figures", response.json().get("tools", []))
+
     def test_react_stream_uses_append_style_messages(self):
         # 流式 react 路径与同步路径共用 _react_planner_messages（system 文本同源）；
         # react 流式仍保持非 json_object 的既有契约，消息形态与同步一致。
@@ -255,9 +306,11 @@ class MigratedWorkloadContractTest(unittest.TestCase):
         })
         captured = {}
 
-        def fake_stream(run_id, route, messages, require_json_object=False, emit_visible_content=True):
+        def fake_stream(run_id, route, messages, require_json_object=False, emit_visible_content=True,
+                        validate_terminal_json=False):
             captured["messages"] = messages
             captured["require_json_object"] = require_json_object
+            captured["validate_terminal_json"] = validate_terminal_json
             yield {"content": '{"decision":"final","conversationTitle":"定义域","cards":[{"summary":"ok"}]}'}
             yield {"usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}}
 
@@ -268,8 +321,130 @@ class MigratedWorkloadContractTest(unittest.TestCase):
         self.assertNotIn("observations", json.loads(messages[1]["content"]))
         self.assertEqual(json.loads(messages[-1]["content"]), {"observation": "观察一"})
         self.assertFalse(captured["require_json_object"])
+        # 2026-09-08：react 流式也进终检通道（不强制 response_format，兼容 markdown 围栏）。
+        self.assertTrue(captured["validate_terminal_json"])
         self.assertEqual(events[0]["event"], "started")
         self.assertEqual(events[-1]["event"], "completed")
+
+    @staticmethod
+    def react_stream_request(run_id: str):
+        return StudentExplanationRunRequest.model_validate({
+            "runId": run_id,
+            "mode": "react",
+            "problem": "已知等差数列首项为3，公差为4，求第10项",
+            "availableTools": ["search_textbook"],
+            "evidence": [],
+            "providerRoute": MigratedWorkloadContractTest.route(),
+        })
+
+    def test_json_object_repairs_illegal_backslash_but_keeps_valid_escapes(self):
+        # 2026-09-08 验收根因：GLM flash 把 LaTeX 反斜杠直写进 JSON（$\3}$），严格解析 422。
+        # 修复解析必须补住非法 \X，同时不得破坏正确双写的 \\times 与 \"。
+        repaired = MigratedWorkloadRuntime._json_object('{"t":"等差数列 $\\3}$"}')
+        self.assertEqual(repaired["t"], "等差数列 $\\3}$")
+        valid = MigratedWorkloadRuntime._json_object('{"t":"$a\\\\times b$ \\"引\\"" }')
+        self.assertEqual(valid["t"], '$a\\times b$ "引"')
+        with self.assertRaises(HTTPException):
+            MigratedWorkloadRuntime._json_object('{"t":"broken', )
+
+    def test_react_stream_illegal_escape_json_completes_via_repair(self):
+        runtime = MigratedWorkloadRuntime()
+        request = self.react_stream_request("explanation-react-repair-1")
+
+        def fake_stream(run_id, route, messages, require_json_object=False, emit_visible_content=True,
+                        validate_terminal_json=False):
+            yield {"attempt": 1, "content": '{"decision":"final","conversationTitle":"等差数列 $\\3}$",'
+                                            '"cards":[{"cardKey":"a10","summary":"$a_{10}=39$","renderMode":"formula"}]}'}
+            yield {"attempt": 1, "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}}
+
+        with patch.object(runtime, "_stream_call_json", side_effect=fake_stream):
+            events = list(runtime.stream_student_explanation(request))
+        completed = events[-1]
+        self.assertEqual(completed["event"], "completed")
+        self.assertEqual(completed["data"]["conversationTitle"], "等差数列 $\\3}$")
+        self.assertEqual(completed["data"]["cards"][0]["summary"], "$a_{10}=39$")
+
+    def test_react_stream_retry_attempt_replaces_accumulated_garbage(self):
+        # 换 provider 重试后，终稿解析只允许看到最后一次尝试的内容：第一次的半截垃圾
+        # 若不清空，find("{")..rfind("}") 会把两段拼成一段，重试成功也必然再 422。
+        runtime = MigratedWorkloadRuntime()
+        request = self.react_stream_request("explanation-react-attempt-reset-1")
+
+        def fake_stream(run_id, route, messages, require_json_object=False, emit_visible_content=True,
+                        validate_terminal_json=False):
+            yield {"attempt": 1, "reasoning": "第一轮思考碎片"}
+            yield {"attempt": 1, "content": '{"decision":"final","坏JSON'}
+            yield {"attempt": 2, "reasoning": "第二轮完整中文思考"}
+            yield {"attempt": 2, "content": '{"decision":"action","tools":["search_textbook"],"queries":["等差数列通项公式"]}'}
+            yield {"attempt": 2, "usage": {"prompt_tokens": 12, "completion_tokens": 6, "total_tokens": 18}}
+
+        with patch.object(runtime, "_stream_call_json", side_effect=fake_stream):
+            events = list(runtime.stream_student_explanation(request))
+        completed = events[-1]
+        self.assertEqual(completed["event"], "completed")
+        self.assertEqual(completed["data"]["decision"], "action")
+        self.assertEqual(completed["data"]["tools"], ["search_textbook"])
+        self.assertEqual(completed["data"]["reasoningTrace"], "第二轮完整中文思考")
+
+    def test_react_stream_unrepairable_json_degrades_to_planner_final(self):
+        # 结构坏到无法修复（缺键名/括号失衡）时不再 422 掐死整轮：按同步路径同口径降级
+        # planner-only final（空卡片），让 Java 进 compose 校验回退拿真实讲解。
+        runtime = MigratedWorkloadRuntime()
+        request = self.react_stream_request("explanation-react-degrade-1")
+
+        def fake_stream(run_id, route, messages, require_json_object=False, emit_visible_content=True,
+                        validate_terminal_json=False):
+            yield {"attempt": 1, "content": '{"decision":"final","tools":[],"queries":[],"conversationTitle":"坏',}
+            yield {"attempt": 1, "usage": {"prompt_tokens": 9, "completion_tokens": 4, "total_tokens": 13}}
+
+        with patch.object(runtime, "_stream_call_json", side_effect=fake_stream):
+            events = list(runtime.stream_student_explanation(request))
+        completed = events[-1]
+        self.assertEqual(completed["event"], "completed")
+        self.assertEqual(completed["data"]["decision"], "final")
+        self.assertEqual(completed["data"]["cards"], [])
+
+    def test_compose_stream_invalid_cards_still_errors(self):
+        # 空卡降级只适用于 react（Java 有 compose 回退）；compose 卡片就是终稿，校验不过必须如实报错。
+        runtime = MigratedWorkloadRuntime()
+        request = StudentExplanationRunRequest.model_validate({
+            "runId": "explanation-compose-error-1",
+            "mode": "compose",
+            "problem": "求函数定义域",
+            "evidence": [],
+            "providerRoute": MigratedWorkloadContractTest.route(),
+        })
+
+        def fake_stream(run_id, route, messages, require_json_object=False, emit_visible_content=True,
+                        validate_terminal_json=False):
+            yield {"attempt": 1, "content": '{"conversationTitle":',}
+            yield {"attempt": 1, "usage": {"prompt_tokens": 9, "completion_tokens": 4, "total_tokens": 13}}
+
+        with patch.object(runtime, "_stream_call_json", side_effect=fake_stream):
+            events = list(runtime.stream_student_explanation(request))
+        self.assertEqual(events[-1]["event"], "error")
+
+    def test_react_sync_retries_parse_failure_once(self):
+        # 同步 react 与流式同根因：_call_json 只在 HTTP 层换通道，解析失败过去直接 422。
+        # 现在解析失败重呼一次；第二次合格即 COMPLETED。
+        result = type("Result", (), {"provider": "openai", "model": "gpt-5.6-luna",
+                                     "usage": lambda self: {"promptTokens": 5, "completionTokens": 6,
+                                                            "totalTokens": 11, "estimatedCost": -1.0}})()
+        with patch("app.workload_runtime.MigratedWorkloadRuntime._call_json",
+                   side_effect=[('{"decision":"final","坏', result),
+                                ('{"decision":"final","conversationTitle":"定义域","cards":[{"cardKey":"d","summary":"分母不为零。","renderMode":"text"}]}', result)]):
+            response = self.client.post(
+                "/v1/student-explanations/sync",
+                headers={"Authorization": "Bearer worker-test-key"},
+                json={
+                    "runId": "explanation-react-sync-retry-1",
+                    "mode": "react",
+                    "problem": "求函数定义域",
+                    "providerRoute": self.route(),
+                },
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["decision"], "final")
 
     def test_durable_explanation_reuses_completed_result_and_replays_events(self):
         with tempfile.TemporaryDirectory() as directory, patch.dict(
@@ -341,6 +516,40 @@ class MigratedWorkloadContractTest(unittest.TestCase):
             )
             self.assertEqual(merged_content, "第一段第二段")
             self.assertEqual([event["event"] for _, event in replay][-1], "completed")
+
+    def test_durable_delta_merge_keeps_reasoning_and_content_both_concatenated(self):
+        # 2026-09-08 思考流乱码根因回归：合并窗口曾只拼接 content、丢弃后续 reasoning，
+        # GLM 强制思考每窗口多条增量被挖空，前端拼出的"思考"就是互不连续的乱码碎片。
+        with tempfile.TemporaryDirectory() as directory, patch.dict(
+            os.environ,
+            {"MATH_AGENT_STUDENT_EXPLANATION_CHECKPOINT_DB": os.path.join(directory, "runs.sqlite3")},
+        ):
+            def stream_executor(request):
+                yield {"event": "started", "data": {"runId": request.runId}}
+                # 同一 80ms 窗口内：两条 reasoning + 两条 content 交替到达。
+                yield {"event": "delta", "data": {"runId": request.runId, "reasoning": "问题", "providerName": "glm", "modelCode": "glm-5.2"}}
+                yield {"event": "delta", "data": {"runId": request.runId, "reasoning": "要求一句话", "providerName": "glm", "modelCode": "glm-5.2"}}
+                yield {"event": "delta", "data": {"runId": request.runId, "content": "{\"dec", "providerName": "glm", "modelCode": "glm-5.2"}}
+                yield {"event": "delta", "data": {"runId": request.runId, "reasoning": "说明顶点", "providerName": "glm", "modelCode": "glm-5.2"}}
+                yield {"event": "delta", "data": {"runId": request.runId, "content": "ision}", "providerName": "glm", "modelCode": "glm-5.2"}}
+                yield {"event": "completed", "data": {"runId": request.runId, "status": "COMPLETED", "decision": "final", "cards": []}}
+
+            runtime = DurableStudentExplanationRuntime(lambda _: {}, stream_executor)
+            request = StudentExplanationRunRequest.model_validate({
+                "runId": "durable-stream-reasoning-merge",
+                "problem": "求定义域",
+                "providerRoute": self.route(),
+            })
+            events = list(runtime.stream_events(request))
+            merged_reasoning = "".join(
+                str(event["data"].get("reasoning", "")) for _, event in events if event["event"] == "delta"
+            )
+            merged_content = "".join(
+                str(event["data"].get("content", "")) for _, event in events if event["event"] == "delta"
+            )
+            # 思考增量必须完整按序保留：任何一条被丢弃都会让前端思考面板碎片化（乱码）。
+            self.assertEqual(merged_reasoning, "问题要求一句话说明顶点")
+            self.assertEqual(merged_content, "{\"decision}")
 
     def test_durable_stream_persists_error_when_executor_has_no_terminal_event(self):
         with tempfile.TemporaryDirectory() as directory, patch.dict(
@@ -782,13 +991,16 @@ class MigratedWorkloadContractTest(unittest.TestCase):
 
         route = ProviderRoute.model_validate(self.route())
         messages = [{"role": "user", "content": "压缩这轮对话"}]
-        tracked = ProviderResult("openai", "gpt-5.6-luna", "{}", 10, 5, 15, 0.0)
+        # 2026-09-09 chat_messages 重构为委托 chat_result（animated_lesson 需要 provider 审计），
+        # 取的是 ProviderResult.content；mock 两元素必须一致，否则测的是元组顺序而不是委托链。
+        tracked = ProviderResult("openai", "gpt-5.6-luna", '{"goal":"复习函数"}', 10, 5, 15, 0.0)
         with patch(
                 "app.workload_runtime.MigratedWorkloadRuntime._call_json",
                 return_value=('{"goal":"复习函数"}', tracked)) as call:
             content = MigratedWorkloadRuntime().chat_messages("context-run-9", route, messages)
         self.assertEqual(content, '{"goal":"复习函数"}')
-        call.assert_called_once_with("context-run-9", route, messages)
+        # 缺省预算参数以 (None, None) 透传给 _call_json，全局 45s/网关默认行为不变。
+        call.assert_called_once_with("context-run-9", route, messages, None, None)
 
     def test_context_graph_is_wired_to_tracked_summarizer(self):
         from app.server import migrated_workload_runtime, student_explanation_context_graph

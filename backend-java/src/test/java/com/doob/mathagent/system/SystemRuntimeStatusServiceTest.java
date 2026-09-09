@@ -165,6 +165,45 @@ class SystemRuntimeStatusServiceTest {
         assertThat(response.feishu().processTimeoutSeconds()).isEqualTo(45);
     }
 
+    @Test
+    void glmAsDefaultProviderIsRecognizedByReadinessAggregation() {
+        // 2026-09-08：默认 provider 切 glm 时 readiness 必须能解析出该路由（此前 aiStatus 漏列 glm，
+        // 会把默认路由误判成 AI_DEFAULT_PROVIDER_NOT_CONFIGURED，并把 compose 健康检查拖成 unhealthy）。
+        SystemRuntimeStatusService service = new SystemRuntimeStatusService(
+                new MockEnvironment(),
+                new RedisRateLimitProperties(false, "math-agent:test:rate-limit"),
+                new RedisTextbookSearchCacheProperties(false, "math-agent:test:search", Duration.ofMinutes(3), Duration.ofMinutes(1)),
+                new VectorIndexService(
+                        new VectorIndexProperties(false, "", "", "math_agent_resource_blocks", 1024, "", "", "", 10000),
+                        SystemRuntimeStatusServiceTest::vectorStatusResponse,
+                        new InMemoryTeacherResourceStore(),
+                        new InMemoryTeacherDocumentBlockStore()),
+                new DatabaseMigrationProperties(false, "", "", ""),
+                durableHistoryStore(false),
+                glmOnlyAiProperties());
+
+        SystemRuntimeStatusResponse response = service.status();
+
+        assertThat(response.ai().defaultProviderName()).isEqualTo("glm");
+        assertThat(response.ai().defaultModelCode()).isEqualTo("glm-5.2");
+        assertThat(response.ai().defaultProviderConfigured()).isTrue();
+        assertThat(response.ai().enabledProviderCount()).isEqualTo(1);
+        assertThat(response.deployment().blockingIssues())
+                .doesNotContain("AI_DEFAULT_PROVIDER_NOT_CONFIGURED", "AI_NO_PROVIDER_CONFIGURED");
+    }
+
+    private static AiProviderProperties glmOnlyAiProperties() {
+        AiProviderProperties properties = new AiProviderProperties();
+        properties.setDefaultProvider("glm");
+        properties.getOpenai().setEnabled(false);
+        properties.getDashscope().setEnabled(false);
+        properties.getDeepseek().setEnabled(false);
+        properties.getArk().setEnabled(false);
+        properties.getGlm().setEnabled(true);
+        properties.getGlm().setChatModel("glm-5.2");
+        return properties;
+    }
+
     private static AiProviderProperties aiProperties(String openAiKey) {
         AiProviderProperties properties = new AiProviderProperties();
         properties.getOpenai().setEnabled(openAiKey != null && !openAiKey.isBlank());

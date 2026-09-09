@@ -1,3 +1,4 @@
+import dataclasses
 import json
 from pathlib import Path
 import tempfile
@@ -10,6 +11,8 @@ from app.embeddings import (
     EmbeddingProviderError,
     EmbeddingService,
     LocalBertVocabTokenizer,
+    LocalClipBackend,
+    _WARMUP_IMAGE_DATA_URL,
     clip_page_search_response,
     clip_similarity_response,
     decode_allowed_image_source,
@@ -20,6 +23,12 @@ from app.settings import WorkerSettings
 
 
 class StubLocalClipBackend:
+    def __init__(self):
+        self.warmups = 0
+
+    def warmup(self):
+        self.warmups += 1
+
     def status(self):
         return {
             "status": "ready",
@@ -79,9 +88,10 @@ class EmbeddingServiceTest(unittest.TestCase):
             "verify_gpu_readiness": lambda self: calls.append("reranker"),
             "status": lambda self: {"status": "ready"},
         })()
+        clip_backend = StubLocalClipBackend()
         service = EmbeddingService(
             settings,
-            local_clip_backend=StubLocalClipBackend(),
+            local_clip_backend=clip_backend,
             local_text_embedding_backend=embedding_backend,
             local_rerank_backend=rerank_backend,
         )
@@ -91,8 +101,12 @@ class EmbeddingServiceTest(unittest.TestCase):
 
         self.assertTrue(service.is_retrieval_ready())
         self.assertEqual(calls, ["embedding", "reranker"])
+        # 2026-09-06 老板要求启动预热：CLIP 双塔必须在 readiness 内完成一次真实推理，
+        # 首条相似题图请求不再付模型加载时间。
+        self.assertEqual(clip_backend.warmups, 1)
         service.initialize_retrieval_models()
         self.assertEqual(calls, ["embedding", "reranker"])
+        self.assertEqual(clip_backend.warmups, 1)
 
     def test_retrieval_readiness_does_not_mark_ready_when_reranker_probe_fails(self):
         settings = WorkerSettings.from_environment(env={})
@@ -117,6 +131,36 @@ class EmbeddingServiceTest(unittest.TestCase):
             service.initialize_retrieval_models()
 
         self.assertFalse(service.is_retrieval_ready())
+
+    def test_clip_warmup_skips_when_model_path_not_configured(self):
+        # 未配置 CLIP 的部署不阻塞 readiness（能力可选），warmup 必须是无操作而非抛错。
+        # 显式清空路径：from_environment 会继承宿主/容器真实 env，不能假设默认为空。
+        settings = dataclasses.replace(
+            WorkerSettings.from_environment(env={}), local_clip_model_path=None)
+        backend = LocalClipBackend(settings)
+        calls = []
+        backend.embed_text = lambda *args, **kwargs: calls.append("text")
+        backend.embed_images = lambda *args, **kwargs: calls.append("image")
+
+        backend.warmup()
+
+        self.assertEqual(calls, [])
+
+    def test_clip_warmup_runs_one_real_inference_per_tower(self):
+        settings = dataclasses.replace(
+            WorkerSettings.from_environment(env={}), local_clip_model_path="/models/clip-test")
+        backend = LocalClipBackend(settings)
+        calls = []
+        backend.embed_text = lambda texts, dimensions=None: calls.append(("text", texts))
+        backend.embed_images = lambda images, dimensions=None: calls.append(("image", images))
+
+        backend.warmup()
+
+        self.assertEqual(calls[0][0], "text")
+        self.assertEqual(calls[1][0], "image")
+        # 预热图必须是可解码的合法 data URL：真实首查走同一 _load_image 校验路径。
+        self.assertEqual(calls[1][1], [_WARMUP_IMAGE_DATA_URL])
+        decode_allowed_image_source(_WARMUP_IMAGE_DATA_URL)
 
     def test_cuda_requirement_rejects_cpu_device_before_model_load(self):
         fake_torch = type("FakeTorch", (), {

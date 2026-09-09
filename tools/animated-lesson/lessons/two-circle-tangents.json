@@ -1,0 +1,303 @@
+{
+  "schema": "lesson-plan/v1",
+  "id": "two-circle-tangents",
+  "title": "一题一课 · 两圆公切线（2022 新高考Ⅰ卷 T14）",
+  "problem": {
+    "stem": "写出与圆 $x^2+y^2=1$ 和 $(x-3)^2+(y-4)^2=16$ 都相切的一条直线的方程。",
+    "known": [
+      "圆 $O$：圆心 $(0,0)$，半径 $1$",
+      "圆 $O_1$：圆心 $(3,4)$，半径 $4$",
+      "求两圆的公切线"
+    ],
+    "goal": "写出一条与两圆都相切的直线方程",
+    "core_observation": "圆心距 $d=\\sqrt{3^2+4^2}=5$ 恰等于半径之和，两圆外切，公切线共三条，分内公切线与外公切线讨论。",
+    "answer": "$y=-\\frac{3}{4}x+\\frac{5}{4}$（或 $y=\\frac{7}{24}x-\\frac{25}{24}$，或 $x=-1$）"
+  },
+  "view": {
+    "x": [
+      -3,
+      7
+    ],
+    "y": [
+      -3,
+      7
+    ],
+    "axes": true,
+    "ticks": {
+      "x": [
+        3
+      ],
+      "y": [
+        4
+      ]
+    }
+  },
+  "objects": {
+    "O": {
+      "type": "point",
+      "at": [
+        0,
+        0
+      ],
+      "label": "O"
+    },
+    "c1": {
+      "type": "circle",
+      "center": "O",
+      "radius": 1
+    },
+    "O1": {
+      "type": "point",
+      "at": [
+        3,
+        4
+      ],
+      "label": "$O_1(3,4)$"
+    },
+    "c2": {
+      "type": "circle",
+      "center": "O1",
+      "radius": 4
+    },
+    "segOO1": {
+      "type": "segment",
+      "from": "O",
+      "to": "O1",
+      "style": "aux",
+      "dashed": true
+    },
+    "T": {
+      "type": "point",
+      "at": [
+        0.6,
+        0.8
+      ],
+      "style": "hl"
+    },
+    "lineL": {
+      "type": "line",
+      "from": [
+        -1,
+        2
+      ],
+      "to": [
+        2.2,
+        -0.4
+      ],
+      "style": "main"
+    },
+    "lineN": {
+      "type": "line",
+      "from": [
+        -1,
+        -2.2
+      ],
+      "to": [
+        -1,
+        5.5
+      ],
+      "style": "main"
+    },
+    "Tm1": {
+      "type": "point",
+      "at": [
+        0.28,
+        -0.96
+      ]
+    },
+    "Tm2": {
+      "type": "point",
+      "at": [
+        4.12,
+        0.16
+      ]
+    },
+    "segOTm1": {
+      "type": "segment",
+      "from": "O",
+      "to": "Tm1",
+      "style": "hl",
+      "dashed": true
+    },
+    "segO1Tm2": {
+      "type": "segment",
+      "from": "O1",
+      "to": "Tm2",
+      "style": "hl",
+      "dashed": true
+    },
+    "lineM": {
+      "type": "line",
+      "from": "Tm1",
+      "to": "Tm2",
+      "style": "main",
+      "extend": 0.35
+    }
+  },
+  "chapters": [
+    {
+      "id": "ch1",
+      "title": "题目呈现",
+      "subtitle": "两个圆，一条公切线",
+      "narration": "来看 2022 年新高考一卷这道题。圆 O 的圆心在原点，半径为一；圆 O 一的圆心是三逗四，半径为四。要写出一条与两个圆都相切的直线。",
+      "steps": [
+        {
+          "op": "draw",
+          "ref": "c1"
+        },
+        {
+          "op": "label",
+          "ref": "O",
+          "offset": [
+            -0.35,
+            -0.35
+          ]
+        },
+        {
+          "op": "draw",
+          "ref": "c2"
+        },
+        {
+          "op": "label",
+          "ref": "O1",
+          "offset": [
+            0.35,
+            0.25
+          ]
+        },
+        {
+          "op": "caption",
+          "text": "求与两圆都相切的一条直线"
+        },
+        {
+          "op": "note",
+          "text": "圆 $O$：$x^2+y^2=1$；圆 $O_1$：$(x-3)^2+(y-4)^2=16$"
+        }
+      ]
+    },
+    {
+      "id": "ch2",
+      "title": "判断位置关系",
+      "subtitle": "连心线定乾坤",
+      "narration": "公切线条数由位置关系决定。连接两圆圆心，圆心距等于三逗四的模，等于五，恰好等于两半径之和一加四。所以两圆外切，公切线一共三条。",
+      "steps": [
+        {
+          "op": "draw",
+          "ref": "segOO1"
+        },
+        {
+          "op": "caption",
+          "text": "圆心距 $d=\\sqrt{3^2+4^2}=5=1+4$ → 外切"
+        },
+        {
+          "op": "note",
+          "kind": "formula",
+          "text": "d=\\sqrt{3^2+4^2}=5=1+4"
+        },
+        {
+          "op": "show",
+          "ref": "T"
+        },
+        {
+          "op": "note",
+          "text": "外切 → 内公切线 1 条 + 外公切线 2 条"
+        }
+      ]
+    },
+    {
+      "id": "ch3",
+      "title": "内公切线",
+      "subtitle": "过切点垂直连心线",
+      "narration": "先画过外切点的内公切线。它与连心线垂直，连心线斜率四比三，所以切线斜率负四分之三。设方程代入圆心到直线距离等于一，解得 l 的方程为 y 等于负四分之三 x 加四分之五。",
+      "steps": [
+        {
+          "op": "draw",
+          "ref": "lineL"
+        },
+        {
+          "op": "caption",
+          "text": "内公切线 $l$：斜率 $-\\frac{3}{4}$，$d(O,l)=1$"
+        },
+        {
+          "op": "note",
+          "kind": "formula",
+          "text": "l:\\ y=-\\frac{3}{4}x+\\frac{5}{4}"
+        }
+      ]
+    },
+    {
+      "id": "ch4",
+      "title": "外公切线之一",
+      "subtitle": "看得见的竖线",
+      "narration": "再找外公切线。小圆最左端横坐标为负一，竖直线 x 等于负一到两个圆心的距离分别是一和四，恰好都是半径。所以 x 等于负一是一条外公切线。",
+      "steps": [
+        {
+          "op": "draw",
+          "ref": "lineN"
+        },
+        {
+          "op": "caption",
+          "text": "竖直外公切线 $n$：$x=-1$"
+        },
+        {
+          "op": "note",
+          "kind": "formula",
+          "text": "n:\\ x=-1"
+        }
+      ]
+    },
+    {
+      "id": "ch5",
+      "title": "外公切线之二",
+      "subtitle": "距离等于半径列方程",
+      "narration": "最后一条斜外公切线，用圆心到直线距离等于半径联立求解，得 m 的方程为 y 等于二十四分之七 x 减二十四分之二十五。注意它与两半径都垂直。",
+      "steps": [
+        {
+          "op": "draw",
+          "ref": "segOTm1"
+        },
+        {
+          "op": "draw",
+          "ref": "segO1Tm2"
+        },
+        {
+          "op": "draw",
+          "ref": "lineM"
+        },
+        {
+          "op": "caption",
+          "text": "斜外公切线 $m$：联立 $d(O,l)=1$，$d(O_1,l)=4$"
+        },
+        {
+          "op": "note",
+          "kind": "formula",
+          "text": "m:\\ y=\\frac{7}{24}x-\\frac{25}{24}"
+        }
+      ]
+    },
+    {
+      "id": "ch6",
+      "title": "方法总结",
+      "subtitle": "先定关系，再分类讨论",
+      "narration": "总结一下：公切线问题，先算圆心距定位置关系，再分内切外切逐条讨论，核心工具就是圆心到直线距离等于半径。三条任写一条即得分。",
+      "steps": [
+        {
+          "op": "highlight",
+          "refs": [
+            "lineL",
+            "lineM",
+            "lineN"
+          ]
+        },
+        {
+          "op": "caption",
+          "text": "答案：三条中任写一条"
+        },
+        {
+          "op": "answer",
+          "text": "y=-\\frac{3}{4}x+\\frac{5}{4}"
+        }
+      ]
+    }
+  ]
+}

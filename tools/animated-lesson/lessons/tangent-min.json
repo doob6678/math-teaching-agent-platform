@@ -1,0 +1,375 @@
+{
+  "schema": "lesson-plan/v1",
+  "id": "tangent-min",
+  "title": "一题一课 · 圆的切线最值",
+  "problem": {
+    "stem": "如图，在直角坐标系中，点 $A$ 的坐标为 $(-4,5)$，$\\odot A$ 的半径为 $3$，$P$ 为 $x$ 轴上一动点，$PB$ 切 $\\odot A$ 于点 $B$，则 $PB$ 的最小值是____。",
+    "known": [
+      "圆心 $A(-4,5)$，半径 $3$",
+      "点 $P$ 在 $x$ 轴上运动",
+      "$PB$ 是 $\\odot A$ 的切线，$B$ 为切点"
+    ],
+    "goal": "求切线段 $PB$ 的最小值",
+    "core_observation": "$PB$ 是切线，连接半径 $AB$ 可构造直角三角形；$PB$ 随 $P$ 位置变化，且与 $AP$ 满足勾股关系 $PB=\\sqrt{AP^2-AB^2}$。",
+    "answer": "$4$"
+  },
+  "view": {
+    "x": [
+      -7.5,
+      3.5
+    ],
+    "y": [
+      -1.5,
+      8.5
+    ],
+    "axes": true,
+    "ticks": {
+      "x": [
+        -4
+      ],
+      "y": [
+        5
+      ]
+    }
+  },
+  "objects": {
+    "A": {
+      "type": "point",
+      "at": [
+        -4,
+        5
+      ],
+      "label": "$A(-4,5)$"
+    },
+    "circleA": {
+      "type": "circle",
+      "center": "A",
+      "radius": 3
+    },
+    "E": {
+      "type": "point",
+      "at": [
+        -1.88,
+        7.12
+      ],
+      "style": "main"
+    },
+    "segAE": {
+      "type": "segment",
+      "from": "A",
+      "to": "E",
+      "style": "main"
+    },
+    "P": {
+      "type": "point",
+      "at": [
+        -2.5,
+        0
+      ],
+      "label": "P"
+    },
+    "B": {
+      "type": "tangent_point",
+      "from": "P",
+      "circle": "circleA",
+      "branch": "ccw",
+      "label": "B"
+    },
+    "segPB": {
+      "type": "segment",
+      "from": "P",
+      "to": "B",
+      "style": "main"
+    },
+    "segAB": {
+      "type": "segment",
+      "from": "A",
+      "to": "B",
+      "style": "aux"
+    },
+    "segAP": {
+      "type": "segment",
+      "from": "A",
+      "to": "P",
+      "style": "aux"
+    },
+    "angB": {
+      "type": "angle",
+      "at": "B",
+      "from": "A",
+      "to": "P",
+      "style": "square"
+    }
+  },
+  "chapters": [
+    {
+      "id": "ch1",
+      "title": "题目呈现",
+      "subtitle": "读题画图，标清已知",
+      "narration": "来看这道题。直角坐标系中，圆心 A 的坐标是负四，五，半径为三。P 是 x 轴上的一个动点，PB 与圆 A 相切于点 B。要求的是切线段 PB 的最小值。",
+      "steps": [
+        {
+          "op": "draw",
+          "ref": "circleA"
+        },
+        {
+          "op": "label",
+          "ref": "A",
+          "offset": [
+            -1.5,
+            0.45
+          ]
+        },
+        {
+          "op": "draw",
+          "ref": "segAE"
+        },
+        {
+          "op": "label",
+          "ref": "E",
+          "text": "3",
+          "offset": [
+            0.25,
+            0.2
+          ]
+        },
+        {
+          "op": "caption",
+          "text": "圆心 $A(-4,5)$，半径为 3"
+        },
+        {
+          "op": "show",
+          "ref": "P"
+        },
+        {
+          "op": "label",
+          "ref": "P",
+          "offset": [
+            0.45,
+            -0.42
+          ]
+        },
+        {
+          "op": "caption",
+          "text": "P 是 x 轴上的动点"
+        },
+        {
+          "op": "draw",
+          "ref": "segPB"
+        },
+        {
+          "op": "label",
+          "ref": "B",
+          "offset": [
+            0.35,
+            -0.42
+          ]
+        },
+        {
+          "op": "caption",
+          "text": "$PB$ 切 $\\odot A$ 于点 $B$，求 $PB$ 的最小值"
+        },
+        {
+          "op": "note",
+          "text": "目标：求切线段 $PB$ 的最小值"
+        }
+      ]
+    },
+    {
+      "id": "ch2",
+      "title": "辅助线构造",
+      "subtitle": "遇切线，连半径",
+      "narration": "求 PB，一时没有头绪？遇到切线，第一反应就是连半径。连接 AB，根据切线的性质，AB 垂直于 PB，于是三角形 ABP 是一个直角三角形。",
+      "steps": [
+        {
+          "op": "caption",
+          "text": "遇到切线，连半径"
+        },
+        {
+          "op": "draw",
+          "ref": "segAB"
+        },
+        {
+          "op": "draw",
+          "ref": "angB"
+        },
+        {
+          "op": "note",
+          "text": "$AB\\perp PB$ → $\\triangle ABP$ 是直角三角形"
+        }
+      ]
+    },
+    {
+      "id": "ch3",
+      "title": "勾股定理转化",
+      "subtitle": "构造直角三角形后",
+      "narration": "在直角三角形里，用勾股定理。PB 的平方，等于 AP 的平方减去 AB 的平方。AB 就是半径，等于三。所以 PB 等于根号下 AP 的平方减九。",
+      "steps": [
+        {
+          "op": "caption",
+          "text": "勾股定理：$PB^2=AP^2-AB^2$"
+        },
+        {
+          "op": "note",
+          "kind": "formula",
+          "text": "PB=\\sqrt{AP^2-AB^2}"
+        },
+        {
+          "op": "note",
+          "kind": "formula",
+          "text": "AB=3 \\Rightarrow PB=\\sqrt{AP^2-9}"
+        }
+      ]
+    },
+    {
+      "id": "ch4",
+      "title": "分析变量与常量",
+      "subtitle": "寻找决定 PB 长度的关键",
+      "narration": "仔细观察这个式子。AB 是半径，是不变的常量；而 AP 随着 P 在 x 轴上运动，是变量。要让 PB 最小，只要让 AP 最小。",
+      "steps": [
+        {
+          "op": "draw",
+          "ref": "segAP"
+        },
+        {
+          "op": "highlight",
+          "refs": [
+            "segAB"
+          ],
+          "color": "main"
+        },
+        {
+          "op": "caption",
+          "text": "$AB$ 是常量，$AP$ 是变量"
+        },
+        {
+          "op": "highlight",
+          "refs": [
+            "segAP"
+          ],
+          "color": "hl"
+        },
+        {
+          "op": "note",
+          "text": "$PB$ 最小，当 $AP$ 最小"
+        }
+      ]
+    },
+    {
+      "id": "ch5",
+      "title": "转化最值目标",
+      "subtitle": "化未知为已知",
+      "narration": "切线段的最值，转化成了动点到圆心的距离最短问题。让 P 在 x 轴上动起来，观察 AP 怎么变化。P 运动到什么位置时，AP 最短？",
+      "steps": [
+        {
+          "op": "caption",
+          "text": "$P$ 在 $x$ 轴上运动，$AP$ 何时最短？"
+        },
+        {
+          "op": "trace_move",
+          "mover": "P",
+          "circle": "circleA",
+          "tangent_point": "B",
+          "branch": "ccw",
+          "from": -2.5,
+          "to": -6.8,
+          "run_time": 4.0,
+          "links": [
+            "segPB",
+            "segAB",
+            "segAP"
+          ],
+          "arcs": [
+            "angB"
+          ],
+          "labels": [
+            "P",
+            "B"
+          ]
+        },
+        {
+          "op": "trace_move",
+          "mover": "P",
+          "circle": "circleA",
+          "tangent_point": "B",
+          "branch": "ccw",
+          "from": -6.8,
+          "to": -2.5,
+          "run_time": 3.0,
+          "links": [
+            "segPB",
+            "segAB",
+            "segAP"
+          ],
+          "arcs": [
+            "angB"
+          ],
+          "labels": [
+            "P",
+            "B"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "ch6",
+      "title": "垂线段最短",
+      "subtitle": "AP 什么时候最短？",
+      "narration": "直线外一点到直线上所有点的连线中，垂线段最短。过 A 作 x 轴的垂线，垂足处就是使 AP 最小的 P 点位置。此时 AP 等于点 A 的纵坐标，等于五。",
+      "steps": [
+        {
+          "op": "caption",
+          "text": "垂线段最短：$P$ 运动到 $A$ 的正下方"
+        },
+        {
+          "op": "trace_move",
+          "mover": "P",
+          "circle": "circleA",
+          "tangent_point": "B",
+          "branch": "ccw",
+          "from": -2.5,
+          "to": -4.0,
+          "run_time": 3.5,
+          "links": [
+            "segPB",
+            "segAB",
+            "segAP"
+          ],
+          "arcs": [
+            "angB"
+          ],
+          "labels": [
+            "P",
+            "B"
+          ],
+          "foot_line": "A"
+        },
+        {
+          "op": "note",
+          "text": "$AP$ 最短 $=5$（$A$ 到 $x$ 轴的距离）"
+        }
+      ]
+    },
+    {
+      "id": "ch7",
+      "title": "坐标与距离计算",
+      "subtitle": "代回公式，落定答案",
+      "narration": "把 AP 等于五代回公式。PB 等于根号下二十五减九，等于根号十六，等于四。所以 PB 的最小值是四。记住这一课：遇切线，连半径；切线最值，转化为点到圆心的距离最值。",
+      "steps": [
+        {
+          "op": "caption",
+          "text": "$PB=\\sqrt{5^2-3^2}=4$"
+        },
+        {
+          "op": "note",
+          "kind": "formula",
+          "text": "PB=\\sqrt{5^2-3^2}=\\sqrt{16}=4"
+        },
+        {
+          "op": "answer",
+          "text": "PB_{\\min}=4"
+        }
+      ]
+    }
+  ]
+}

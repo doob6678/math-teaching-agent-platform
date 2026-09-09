@@ -430,7 +430,8 @@ public class StudentExplanationController {
      * @param contentDelta latest provider content delta
      * @return only the new learner-facing text, never JSON punctuation or field names
      */
-    private static String visibleProviderDelta(
+    // package-private：单测直接覆盖"部分 JSON 增量提取"与"action 决策轮零正文"边界，不改可见性到 public。
+    static String visibleProviderDelta(
             StringBuilder cumulativeProviderContent,
             String[] sentVisibleContent,
             String contentDelta) {

@@ -30,6 +30,11 @@ public class PythonMigratedWorkloadClient {
 
     private static final long MIN_TIMEOUT_MS = 1_000L;
     private static final long DEFAULT_TIMEOUT_MS = 60_000L;
+    /**
+     * 动画讲题渲染是分钟级长任务（实测 5~25 分钟），必须独立于交互式 120 秒 workload 客户端；
+     * 冻结契约 2026-09-09 要求 HTTP 超时可配且默认 ≥1800 秒，由 Agent Worker 租约心跳在等待期续租。
+     */
+    private static final long ANIMATED_LESSON_DEFAULT_TIMEOUT_MS = 1_800_000L;
     private static final int MAX_FALLBACKS = 3;
     /** 思考轨迹持久化上限：覆盖长推理链（约 6 万字符 ≈ 2-3 万汉字），超出截断防止 ai_draft_json 无界膨胀。 */
     private static final int REASONING_TRACE_MAX_CHARS = 65_536;
@@ -43,6 +48,8 @@ public class PythonMigratedWorkloadClient {
 
     private final Environment environment;
     private final RestClient client;
+    /** 分钟级长任务（动画讲题渲染）专用；与交互式 workload 客户端共享 base-url，但读超时独立可配。 */
+    private final RestClient longTaskClient;
     private final AiProviderCatalog providerCatalog;
     private final ProviderRouteGrantSigner routeGrantSigner;
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -54,19 +61,32 @@ public class PythonMigratedWorkloadClient {
         this.environment = environment;
         this.providerCatalog = providerCatalog;
         this.routeGrantSigner = routeGrantSigner;
+        String baseUrl = environment.getProperty("math-agent.python-agent.base-url", "http://ai-worker:8091");
+        Long connectTimeoutMs = environment.getProperty(
+                "math-agent.python-agent.connect-timeout-ms", Long.class, 5_000L);
         long timeoutMs = Math.max(MIN_TIMEOUT_MS, environment.getProperty(
                 "math-agent.python-agent.timeout-ms", Long.class, DEFAULT_TIMEOUT_MS));
+        this.client = RestClient.builder()
+                .baseUrl(baseUrl)
+                .requestFactory(buildRequestFactory(timeoutMs, connectTimeoutMs))
+                .build();
+        long animatedLessonTimeoutMs = Math.max(MIN_TIMEOUT_MS, environment.getProperty(
+                "math-agent.animated-lesson.timeout-ms", Long.class, ANIMATED_LESSON_DEFAULT_TIMEOUT_MS));
+        this.longTaskClient = RestClient.builder()
+                .baseUrl(baseUrl)
+                .requestFactory(buildRequestFactory(animatedLessonTimeoutMs, connectTimeoutMs))
+                .build();
+    }
+
+    /** JDK HttpClient 请求工厂：连接超时收敛到 [read, 5s] 区间内，读超时即 worker 等待上限。 */
+    private static JdkClientHttpRequestFactory buildRequestFactory(long readTimeoutMs, long connectTimeoutMs) {
         HttpClient httpClient = HttpClient.newBuilder()
-                .connectTimeout(Duration.ofMillis(Math.min(timeoutMs, environment.getProperty(
-                        "math-agent.python-agent.connect-timeout-ms", Long.class, 5_000L))))
+                .connectTimeout(Duration.ofMillis(Math.min(readTimeoutMs, connectTimeoutMs)))
                 .version(HttpClient.Version.HTTP_1_1)
                 .build();
         JdkClientHttpRequestFactory requestFactory = new JdkClientHttpRequestFactory(httpClient);
-        requestFactory.setReadTimeout(Duration.ofMillis(timeoutMs));
-        this.client = RestClient.builder()
-                .baseUrl(environment.getProperty("math-agent.python-agent.base-url", "http://ai-worker:8091"))
-                .requestFactory(requestFactory)
-                .build();
+        requestFactory.setReadTimeout(Duration.ofMillis(readTimeoutMs));
+        return requestFactory;
     }
 
     /** 调用学习意图分类 endpoint，并校验 Python 返回的有限字段。 */
@@ -94,7 +114,7 @@ public class PythonMigratedWorkloadClient {
                 "runId", runId,
                 "mimeType", bounded(mimeType, 80),
                 "imageDataUrl", imageDataUrl == null ? "" : imageDataUrl,
-                "providerRoute", providerRoute(runId, "image_transcription")));
+                "providerRoute", providerRoute(runId, "image_transcription", true)));
         boolean completed = "COMPLETED".equals(root.path("status").asText());
         return new TranscriptionResult(
                 completed,
@@ -120,7 +140,7 @@ public class PythonMigratedWorkloadClient {
                 "availableTools", availableTools == null ? List.of() : availableTools.stream().map(item -> bounded(item, 80)).toList(),
                 "observations", observations == null ? List.of() : observations.stream().map(item -> bounded(item, 800)).toList(),
                 "imageDataUrl", imageDataUrl == null ? "" : imageDataUrl,
-                "providerRoute", providerRoute(runId, "student_explanation")));
+                "providerRoute", providerRoute(runId, "student_explanation", hasImage(imageDataUrl))));
         requireCompleted(root, "student explanation decision");
         return explanationDecision(root);
     }
@@ -165,7 +185,8 @@ public class PythonMigratedWorkloadClient {
                 "availableTools", availableTools == null ? List.of() : availableTools.stream().map(item -> bounded(item, 80)).toList(),
                 "observations", observations == null ? List.of() : observations.stream().map(item -> bounded(item, 800)).toList(),
                 "imageDataUrl", imageDataUrl == null ? "" : imageDataUrl,
-                "providerRoute", providerRoute(runId, "student_explanation", preferredProviderName, preferredModelCode));
+                "providerRoute", providerRoute(runId, "student_explanation", preferredProviderName, preferredModelCode,
+                        hasImage(imageDataUrl)));
         try {
             return client.post()
                     .uri("/v1/student-explanations/stream")
@@ -236,7 +257,8 @@ public class PythonMigratedWorkloadClient {
                 "availableTools", List.of(),
                 "observations", List.of(),
                 "imageDataUrl", imageDataUrl == null ? "" : imageDataUrl,
-                "providerRoute", providerRoute(runId, "student_explanation", preferredProviderName, preferredModelCode));
+                "providerRoute", providerRoute(runId, "student_explanation", preferredProviderName, preferredModelCode,
+                        hasImage(imageDataUrl)));
         try {
             return client.post()
                     .uri("/v1/student-explanations/stream")
@@ -425,7 +447,7 @@ public class PythonMigratedWorkloadClient {
                         "reservedOutputTokens", Math.max(128, Math.min(reservedOutputTokens, 32_000)),
                         "summaryTriggerTokens", Math.max(256, Math.min(summaryTriggerTokens, CONTEXT_SUMMARY_TRIGGER_TOKENS_CAP)),
                         "maxProviderCalls", 1),
-                "providerRoute", providerRoute(runId, "student_explanation"));
+                "providerRoute", providerRoute(runId, "student_explanation", hasImage(imageDataUrl)));
         try {
             return client.post()
                     .uri("/v2/student-explanations/stream")
@@ -452,9 +474,44 @@ public class PythonMigratedWorkloadClient {
                 "problem", bounded(problem, 8_000),
                 "evidence", explanationEvidence(evidence),
                 "imageDataUrl", imageDataUrl == null ? "" : imageDataUrl,
-                "providerRoute", providerRoute(runId, "student_explanation")));
+                "providerRoute", providerRoute(runId, "student_explanation", hasImage(imageDataUrl))));
         requireCompleted(root, "student explanation");
         return explanationResult(root);
+    }
+
+    /**
+     * 调用动画讲题同步 endpoint（冻结契约 2026-09-09）：题面 → 分镜生成 → Manim 渲染，整单分钟级。
+     *
+     * <p>请求体字段与 Python {@code AnimatedLessonRunRequest}（extra="forbid"）逐一对应，多送字段会被
+     * 422 拒绝，因此这里固定六键；lessonId/storyboard 允许 null 但键必须存在。走 longTaskClient 的独立
+     * 长超时（math-agent.animated-lesson.timeout-ms，默认 1800s），调用方必须在 Agent Worker 的
+     * 租约心跳线程里执行，避免占用交互式请求预算。原始响应 JSON 一并返回，由任务服务原样持久化，
+     * Java 不改写任何教学字段。</p>
+     */
+    public AnimatedLessonResult runAnimatedLesson(
+            String runId, String problemText, String lessonId, boolean render, JsonNode storyboard) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("runId", bounded(runId, 128));
+        payload.put("providerRoute", animatedLessonRoute(runId));
+        payload.put("problemText", bounded(problemText, 20_000));
+        payload.put("lessonId", lessonId == null || lessonId.isBlank() ? null : bounded(lessonId, 64));
+        payload.put("render", render);
+        payload.put("storyboard", storyboard == null || storyboard.isNull() ? null : storyboard);
+        JsonNode root = post(longTaskClient, "/v1/animated-lessons/sync", runId, payload);
+        requireCompleted(root, "animated lesson");
+        try {
+            return new AnimatedLessonResult(
+                    bounded(root.path("lessonId").asText(), 64),
+                    bounded(root.path("videoPath").asText(), 512),
+                    bounded(root.path("storyboardPath").asText(), 512),
+                    bounded(root.path("chaptersPath").asText(), 512),
+                    root.path("durationSec").asDouble(0.0d),
+                    bounded(root.path("providerName").asText(), 64),
+                    bounded(root.path("modelCode").asText(), 160),
+                    objectMapper.writeValueAsString(root));
+        } catch (Exception exception) {
+            throw new IllegalStateException("Animated lesson response is not serializable", exception);
+        }
     }
 
     /** 调用 Python provider probe，并只投影脱敏的公开健康字段。 */
@@ -478,13 +535,18 @@ public class PythonMigratedWorkloadClient {
     }
 
     private JsonNode post(String path, String runId, Map<String, Object> payload) {
+        return post(client, path, runId, payload);
+    }
+
+    /** 指定目标客户端的同步 POST；长超时 workload（动画讲题）走 longTaskClient，其余走共享客户端。 */
+    private JsonNode post(RestClient target, String path, String runId, Map<String, Object> payload) {
         String workerKey = environment.getProperty(
                 "math-agent.python-agent.worker-key", environment.getProperty("math-agent.worker-api-key", ""));
         if (workerKey == null || workerKey.isBlank()) {
             throw new IllegalStateException("Python agent worker key is not configured");
         }
         try {
-            JsonNode root = client.post()
+            JsonNode root = target.post()
                     .uri(path)
                     .contentType(MediaType.APPLICATION_JSON)
                     .header("Authorization", "Bearer " + workerKey)
@@ -542,31 +604,90 @@ public class PythonMigratedWorkloadClient {
     }
 
     private Map<String, Object> providerRoute(String runId, String workload) {
-        return providerRoute(runId, workload, null, null);
+        return providerRoute(runId, workload, null, null, false);
+    }
+
+    /** 无模型偏好但可能带图的路由签发（同步决策、转写等入口）。 */
+    private Map<String, Object> providerRoute(String runId, String workload, boolean imageRequired) {
+        return providerRoute(runId, workload, null, null, imageRequired);
     }
 
     /**
      * 签发本轮 provider 路由；前端模型切换传入偏好时，偏好模型成为 primary（仍经目录白名单校验），
      * 其余启用模型按原顺序作 fallback。routeGrant 按实际列表签名，worker 校验与之一致。
+     *
+     * <p>imageRequired=true（本轮携带题图）时，primary 与 fallback 都只允许已实测支持图片输入的模型：
+     * deepseek 系收到 image_url 块会静默丢图（2026-09-06 探针）。老板 2026-09-06 拍板：用户显式
+     * 选择文本模型又带图时不静默降级，直接抛错让前端提示"该模型不支持图片"；只有"自动"路由才切到
+     * 视觉默认，保证"发送后原图直接进入 AI 上下文"对学生端始终成立。</p>
      */
-    private Map<String, Object> providerRoute(
-            String runId, String workload, String preferredProviderName, String preferredModelCode) {
-        AiProviderCatalog.Provider primary = providerCatalog.preferredProvider(preferredProviderName, preferredModelCode)
-                .orElseGet(providerCatalog::defaultProvider);
-        List<Map<String, String>> fallbacks = providerCatalog.enabledProviders().stream()
+    Map<String, Object> providerRoute(
+            String runId, String workload, String preferredProviderName, String preferredModelCode,
+            boolean imageRequired) {
+        AiProviderCatalog.Provider preferred =
+                providerCatalog.preferredProvider(preferredProviderName, preferredModelCode).orElse(null);
+        if (imageRequired && preferred != null && !AiProviderCatalog.supportsVision(preferred.chatModel())) {
+            throw new IllegalArgumentException("所选模型 " + preferred.name() + "/" + preferred.chatModel()
+                    + " 不支持图片输入，请切换到视觉模型或移除题图");
+        }
+        AiProviderCatalog.Provider primary;
+        if (preferred != null) {
+            primary = preferred;
+        } else if (imageRequired) {
+            primary = providerCatalog.visionDefaultProvider().orElseGet(providerCatalog::defaultProvider);
+        } else {
+            primary = providerCatalog.defaultProvider();
+        }
+        // 带图轮换只允许视觉候选（含同提供商其余已验证视觉模型）；纯文本轮保持原有按提供商默认的路由。
+        java.util.stream.Stream<AiProviderCatalog.Provider> fallbackSource = imageRequired
+                ? providerCatalog.visionRoutes().stream()
+                : providerCatalog.enabledProviders().stream();
+        return signedRoute(runId, workload, primary, fallbackSource
                 .filter(provider -> !provider.name().equals(primary.name())
                         || !provider.chatModel().equals(primary.chatModel()))
                 .limit(MAX_FALLBACKS)
+                .toList());
+    }
+
+    /**
+     * 动画讲题任务路由签发（老板 2026-09-09 拍板）：主位固定 glm——Terra（openai 网关）已从动画讲题
+     * 链路剔除；worker 的 anthropic_compat 适配层承担 glm 线格式差异，Java 侧无需感知。模型编码取
+     * catalog 中 glm 档案的 chatModel 现值为准（环境变量换模型时路由随之漂移，不做本地硬编码）；
+     * fallback 按契约取 deepseek。glm 未在 catalog 启用时抛错终止任务，绝不静默回退 openai——
+     * 静默换链会违反本 workloads 的显式路由口径。
+     */
+    private Map<String, Object> animatedLessonRoute(String runId) {
+        AiProviderCatalog.Provider primary = providerCatalog.provider("glm")
+                .orElseThrow(() -> new IllegalStateException(
+                        "Animated lesson requires the enabled glm route; no silent fallback to the openai gateway"));
+        List<AiProviderCatalog.Provider> fallbacks = providerCatalog.provider("deepseek")
+                .stream()
+                .filter(provider -> !provider.name().equals(primary.name())
+                        || !provider.chatModel().equals(primary.chatModel()))
+                .toList();
+        return signedRoute(runId, "animated_lesson", primary, fallbacks);
+    }
+
+    /** 把 primary + 有序 fallback 列表编成 worker 契约的 providerRoute，并按实际列表签发 routeGrant。 */
+    private Map<String, Object> signedRoute(
+            String runId, String workload, AiProviderCatalog.Provider primary,
+            List<AiProviderCatalog.Provider> fallbackProviders) {
+        List<Map<String, String>> fallbacks = fallbackProviders.stream()
                 .map(provider -> Map.of("name", provider.name(), "model", provider.chatModel()))
                 .toList();
         List<ProviderRouteGrantSigner.ProviderRoute> routes = new java.util.ArrayList<>();
         routes.add(new ProviderRouteGrantSigner.ProviderRoute(primary.name(), primary.chatModel()));
-        fallbacks.stream().map(item -> new ProviderRouteGrantSigner.ProviderRoute(item.get("name"), item.get("model")))
-                .forEach(routes::add);
+        fallbackProviders.forEach(provider ->
+                routes.add(new ProviderRouteGrantSigner.ProviderRoute(provider.name(), provider.chatModel())));
         return Map.of(
                 "primary", Map.of("name", primary.name(), "model", primary.chatModel()),
                 "fallbacks", fallbacks,
                 "routeGrant", routeGrantSigner.sign(runId, workload, routes));
+    }
+
+    /** 本轮 payload 是否携带题图；决定 provider 路由是否强制视觉能力。 */
+    private static boolean hasImage(String imageDataUrl) {
+        return imageDataUrl != null && !imageDataUrl.isBlank();
     }
 
     private static void requireCompleted(JsonNode root, String workload) {
@@ -577,7 +698,17 @@ public class PythonMigratedWorkloadClient {
 
     private static String bounded(String value, int limit) {
         String normalized = value == null ? "" : value.strip();
-        return normalized.length() <= limit ? normalized : normalized.substring(0, Math.max(0, limit - 3)) + "...";
+        if (normalized.length() <= limit) {
+            return normalized;
+        }
+        // 2026-09-08 思考乱码修复：截断点若落在 UTF-16 代理对中间会留下孤立高代理项，
+        // reasoningTrace 持久化后历史回看渲染成 ""（前端侧新乱码）。退一格丢掉残缺代理对即可，
+        // 长度预算语义不变（仍按 limit 码元计）。
+        int end = Math.max(0, limit - 3);
+        if (end > 0 && Character.isHighSurrogate(normalized.charAt(end - 1))) {
+            end--;
+        }
+        return normalized.substring(0, end) + "...";
     }
 
     private static double boundedConfidence(double value) {
@@ -656,6 +787,22 @@ public class PythonMigratedWorkloadClient {
     }
 
     public record Usage(int promptTokens, int completionTokens, int totalTokens) {
+    }
+
+    /**
+     * 动画讲题 worker 响应的类型化投影；rawJson 保留响应原文（含 chapters/problem/usage），
+     * 供任务服务原样持久化，Java 不增删教学字段。路径字符串是 worker 容器内的绝对产物路径，
+     * 由 compose 将同一宿主目录以相同容器路径挂进 worker 与 backend 后对 Java 可读。
+     */
+    public record AnimatedLessonResult(
+            String lessonId,
+            String videoPath,
+            String storyboardPath,
+            String chaptersPath,
+            double durationSec,
+            String providerName,
+            String modelCode,
+            String rawJson) {
     }
 
     public record HealthResult(

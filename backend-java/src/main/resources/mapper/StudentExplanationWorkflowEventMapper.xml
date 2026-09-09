@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 自定义 SQL 遵循项目约定放 XML 不放注解（SqlInjectionGuardContractTest 禁止 mapper 层注解 SQL）。
+     全部使用 #{} 参数绑定：event_id 来自 Redis 序列，run_id 来自服务端签发的 UUID，无任何用户可控拼接。 -->
+<mapper namespace="com.doob.mathagent.student.mapper.StudentExplanationWorkflowEventMapper">
+    <insert id="insertWithExplicitId"
+            parameterType="com.doob.mathagent.student.entity.StudentExplanationWorkflowEventEntity">
+        INSERT INTO student_explanation_workflow_event (event_id, run_id, event_name, event_json)
+        VALUES (#{eventId}, #{runId}, #{eventName}, #{eventJson})
+    </insert>
+
+    <select id="selectMaxEventId" resultType="long">
+        SELECT COALESCE(MAX(event_id), 0) FROM student_explanation_workflow_event
+    </select>
+</mapper>

@@ -51,6 +51,20 @@ export function EvidenceCard({ hit, rank }: { hit: TextbookSearchHit; rank: numb
           <span>{retrievalStrategyLabel(hit.retrievalStrategy)}</span>
         </div>
         <p className="chapter-path">{hit.chapterPath.join(" / ")}</p>
+        {/* 20260903 CLIP 监督验收：图片检索召回此前只显示 sourcePageImage 路径文本，用户看不到
+            被 CLIP 命中的页面。页图经 TextbookPageImageController 鉴权路由按 docId+PDF 页码取回，
+            缩略加载失败时静默隐藏，不阻塞文本证据展示。 */}
+        {hit.docId && hit.pageNo > 0 ? (
+          <img
+            className="evidence-page-image"
+            src={`/api/resources/textbooks/${encodeURIComponent(hit.docId)}/pages/${hit.pageNo}/image`}
+            alt={`${hit.bookName} 第 ${hit.pageNo} 页`}
+            loading="lazy"
+            onError={(event) => {
+              event.currentTarget.style.display = "none";
+            }}
+          />
+        ) : null}
         <p className="snippet">{compactText(hit.textSnippet, 150)}</p>
         {hit.formulaText ? (
           <details className="review-details">

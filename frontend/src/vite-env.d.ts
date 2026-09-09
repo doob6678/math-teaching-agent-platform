@@ -38,6 +38,8 @@ declare module "lucide-react" {
   export const BrainCircuit: LucideIcon;
   export const FileText: LucideIcon;
   export const Sparkles: LucideIcon;
+  export const Clapperboard: LucideIcon;
+  export const LoaderCircle: LucideIcon;
   export const ExternalLink: LucideIcon;
   export const RefreshCw: LucideIcon;
   export const Copy: LucideIcon;

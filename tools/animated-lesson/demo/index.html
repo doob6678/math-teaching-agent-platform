@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>一题一课 · 分步动画讲解原型</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+<style>
+  :root { --ink:#1F2937; --sub:#6B7280; --line:#E5E7EB; --primary:#4D6BFE; --paper:#FAFAF8; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { font-family:"Microsoft YaHei","PingFang SC",sans-serif; background:var(--paper); color:var(--ink); }
+  header { padding:18px 28px 10px; }
+  header h1 { font-size:19px; font-weight:600; }
+  header p { font-size:12.5px; color:var(--sub); margin-top:3px; }
+  .tabs { display:flex; gap:8px; padding:6px 28px 14px; flex-wrap:wrap; }
+  .tab { border:1px solid var(--line); background:#fff; color:var(--sub); font-size:13px;
+         padding:7px 14px; border-radius:8px; cursor:pointer; }
+  .tab.on { color:var(--primary); border-color:var(--primary); background:#F0F3FF; font-weight:600; }
+  .main { display:grid; grid-template-columns:minmax(0,1fr) 300px; gap:18px; padding:0 28px; }
+  .player { background:#000; border-radius:12px; overflow:hidden; }
+  video { width:100%; display:block; aspect-ratio:16/9; outline:none; }
+  .side { background:#fff; border:1px solid var(--line); border-radius:12px; padding:14px 16px; height:fit-content; }
+  .side h2 { font-size:13px; color:var(--sub); font-weight:500; margin-bottom:8px; }
+  .ch { display:flex; gap:10px; align-items:baseline; padding:8px 10px; border-radius:8px; cursor:pointer; }
+  .ch:hover { background:#F5F6FA; }
+  .ch.on { background:#F0F3FF; }
+  .ch .no { font-size:11px; color:var(--sub); width:18px; flex:none; }
+  .ch.on .no { color:var(--primary); font-weight:700; }
+  .ch .tt { font-size:13.5px; }
+  .ch .tt small { display:block; font-size:11.5px; color:var(--sub); margin-top:1px; }
+  .ch .tm { margin-left:auto; font-size:11.5px; color:var(--sub); flex:none; font-variant-numeric:tabular-nums; }
+  .cards { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; padding:16px 28px 30px; }
+  .card { background:#fff; border:1px solid var(--line); border-radius:12px; padding:13px 15px; }
+  .card h3 { font-size:12px; color:var(--primary); font-weight:600; margin-bottom:7px; }
+  .card ul { list-style:none; font-size:13px; line-height:1.7; }
+  .card li::before { content:"·"; color:var(--sub); margin-right:6px; }
+  .card.ans { text-align:center; }
+  .card.ans .v { display:inline-block; margin-top:14px; color:#0E9F6E; border:1px solid #0E9F6E;
+                 border-radius:8px; padding:6px 16px; font-size:14px; font-weight:600; }
+  .stem { padding:0 28px 14px; font-size:13.5px; color:var(--sub); line-height:1.8; }
+  @media (max-width:1000px){ .main{grid-template-columns:1fr} .cards{grid-template-columns:1fr 1fr} }
+</style>
+</head>
+<body>
+<header>
+  <h1>一题一课 · 分步动画讲解</h1>
+  <p>分镜 JSON → Manim 确定性编译 → 配音驱动时长 → 中文章节封装（原型：4 道真题，含竞品同款题）</p>
+</header>
+<div class="tabs" id="tabs"></div>
+<div class="main">
+  <div class="player"><video id="v" controls playsinline></video></div>
+  <div class="side"><h2>视频章节</h2><div id="chs"></div></div>
+</div>
+<div class="stem" id="stem"></div>
+<div class="cards" id="cards"></div>
+<script>
+const LESSONS = [{"id": "tangent-min", "title": "一题一课 · 圆的切线最值", "total": 97.19, "problem": {"stem": "如图，在直角坐标系中，点 $A$ 的坐标为 $(-4,5)$，$\\odot A$ 的半径为 $3$，$P$ 为 $x$ 轴上一动点，$PB$ 切 $\\odot A$ 于点 $B$，则 $PB$ 的最小值是____。", "known": ["圆心 $A(-4,5)$，半径 $3$", "点 $P$ 在 $x$ 轴上运动", "$PB$ 是 $\\odot A$ 的切线，$B$ 为切点"], "goal": "求切线段 $PB$ 的最小值", "core_observation": "$PB$ 是切线，连接半径 $AB$ 可构造直角三角形；$PB$ 随 $P$ 位置变化，且与 $AP$ 满足勾股关系 $PB=\\sqrt{AP^2-AB^2}$。", "answer": "$4$"}, "chapters": [{"id": "ch1", "start": 0.0, "duration": 15.532, "title": "题目呈现", "subtitle": "读题画图，标清已知"}, {"id": "ch2", "start": 15.532, "duration": 13.766, "title": "辅助线构造", "subtitle": "遇切线，连半径"}, {"id": "ch3", "start": 29.298, "duration": 12.299, "title": "勾股定理转化", "subtitle": "构造直角三角形后"}, {"id": "ch4", "start": 41.597, "duration": 12.533, "title": "分析变量与常量", "subtitle": "寻找决定 PB 长度的关键"}, {"id": "ch5", "start": 54.13, "duration": 14.166, "title": "转化最值目标", "subtitle": "化未知为已知"}, {"id": "ch6", "start": 68.296, "duration": 14.266, "title": "垂线段最短", "subtitle": "AP 什么时候最短？"}, {"id": "ch7", "start": 82.562, "duration": 14.633, "title": "坐标与距离计算", "subtitle": "代回公式，落定答案"}]}, {"id": "two-circle-tangents", "title": "一题一课 · 两圆公切线（2022 新高考Ⅰ卷 T14）", "total": 82.2, "problem": {"stem": "写出与圆 $x^2+y^2=1$ 和 $(x-3)^2+(y-4)^2=16$ 都相切的一条直线的方程。", "known": ["圆 $O$：圆心 $(0,0)$，半径 $1$", "圆 $O_1$：圆心 $(3,4)$，半径 $4$", "求两圆的公切线"], "goal": "写出一条与两圆都相切的直线方程", "core_observation": "圆心距 $d=\\sqrt{3^2+4^2}=5$ 恰等于半径之和，两圆外切，公切线共三条，分内公切线与外公切线讨论。", "answer": "$y=-\\frac{3}{4}x+\\frac{5}{4}$（或 $y=\\frac{7}{24}x-\\frac{25}{24}$，或 $x=-1$）"}, "chapters": [{"id": "ch1", "start": 0.0, "duration": 13.166, "title": "题目呈现", "subtitle": "两个圆，一条公切线"}, {"id": "ch2", "start": 13.166, "duration": 11.866, "title": "判断位置关系", "subtitle": "连心线定乾坤"}, {"id": "ch3", "start": 25.032, "duration": 17.433, "title": "内公切线", "subtitle": "过切点垂直连心线"}, {"id": "ch4", "start": 42.465, "duration": 14.133, "title": "外公切线之一", "subtitle": "看得见的竖线"}, {"id": "ch5", "start": 56.597, "duration": 13.133, "title": "外公切线之二", "subtitle": "距离等于半径列方程"}, {"id": "ch6", "start": 69.73, "duration": 12.466, "title": "方法总结", "subtitle": "先定关系，再分类讨论"}]}, {"id": "tangent-angle", "title": "一题一课 · 圆外两切线的夹角（2023 新课标Ⅰ卷 T6）", "total": 58.63, "problem": {"stem": "过点 $(0,-2)$ 与圆 $x^2+y^2-4x-1=0$ 相切的两条直线的夹角为 $\\alpha$，则 $\\sin\\alpha=$（  ）A. $1$  B. $\\frac{\\sqrt{15}}{4}$  C. $\\frac{\\sqrt{10}}{4}$  D. $\\frac{\\sqrt{6}}{4}$", "known": ["圆 $x^2+y^2-4x-1=0$，即 $(x-2)^2+y^2=5$", "外点 $P(0,-2)$", "两切线夹角为 $\\alpha$"], "goal": "求 $\\sin\\alpha$", "core_observation": "连半径构造直角三角形：切线长 $\\sqrt{3}$，半角正弦余弦易求，倍角公式合成 $\\sin\\angle APB$；$\\angle APB$ 为钝角，$\\alpha$ 与其互补、正弦相同。", "answer": "B（$\\frac{\\sqrt{15}}{4}$）"}, "chapters": [{"id": "ch1", "start": 0.0, "duration": 13.833, "title": "题目呈现", "subtitle": "过外点作两条切线"}, {"id": "ch2", "start": 13.833, "duration": 8.266, "title": "配方定圆", "subtitle": "一般式 → 标准式"}, {"id": "ch3", "start": 22.099, "duration": 13.499, "title": "连半径造直角", "subtitle": "切线长的来源"}, {"id": "ch4", "start": 35.598, "duration": 11.533, "title": "半角入手", "subtitle": "先求 ∠APC 的正弦余弦"}, {"id": "ch5", "start": 47.13, "duration": 11.499, "title": "倍角合成", "subtitle": "钝角修正，正弦不变"}]}, {"id": "ellipse-moving-line", "title": "一题一课 · 椭圆与动直线恒成立（2024 天津卷 T18）", "total": 78.9, "problem": {"stem": "已知椭圆 $C:\\frac{x^2}{a^2}+\\frac{y^2}{b^2}=1$ $(a>b>0)$ 的离心率为 $\\frac{1}{2}$，左顶点为 $A$，下顶点为 $B$，$C$ 是 $OB$ 的中点，$\\triangle ABC$ 的面积为 $\\frac{3\\sqrt{3}}{2}$。(2) 过点 $(0,-\\frac{3}{2})$ 的直线与椭圆交于 $P$、$Q$，$y$ 轴上是否存在定点 $T$，使 $\\overrightarrow{TP}\\cdot\\overrightarrow{TQ}\\le 0$ 恒成立？", "known": ["离心率 $e=\\frac{1}{2}$", "$C$ 是 $OB$ 中点，$S_{\\triangle ABC}=\\frac{3\\sqrt{3}}{2}$", "动直线过定点 $(0,-\\frac{3}{2})$"], "goal": "求椭圆方程，并判断 $y$ 轴上满足 $\\overrightarrow{TP}\\cdot\\overrightarrow{TQ}\\le 0$ 恒成立的 $T$ 的范围", "core_observation": "$e=\\frac{1}{2}$ 定形状（$a=2c$，$b=\\sqrt{3}c$），面积定大小（$\\frac{ab}{4}=\\frac{3\\sqrt{3}}{2}$）；$\\overrightarrow{TP}\\cdot\\overrightarrow{TQ}\\le 0$ 即 $\\angle PTQ$ 不小于直角，$T$ 在以 $PQ$ 为直径的圆内。", "answer": "(1) $\\frac{x^2}{12}+\\frac{y^2}{9}=1$；(2) 存在，$t\\in[-3,\\frac{3}{2}]$"}, "chapters": [{"id": "ch1", "start": 0.0, "duration": 19.033, "title": "题目呈现", "subtitle": "离心率与面积双条件定椭圆"}, {"id": "ch2", "start": 19.033, "duration": 12.899, "title": "离心率定形状", "subtitle": "a、b、c 的比例关系"}, {"id": "ch3", "start": 31.932, "duration": 14.666, "title": "面积定大小", "subtitle": "以 BC 为底的三角形"}, {"id": "ch4", "start": 46.598, "duration": 23.266, "title": "动直线演示", "subtitle": "TP·TQ ≤ 0 恒成立？"}, {"id": "ch5", "start": 69.864, "duration": 9.033, "title": "结论", "subtitle": "直径圆内判定，落定范围"}]}];
+const v = document.getElementById('v');
+let cur = 0;
+function fmt(t){ const m=Math.floor(t/60), s=(t%60); return String(m).padStart(2,'0')+':'+s.toFixed(1).padStart(4,'0'); }
+// $...$ 混排渲染：KaTeX 就绪则真排版，未就绪（离线）降级保留原文，不阻塞页面
+function math(s){
+  if (typeof katex === 'undefined') return s;
+  return s.replace(/\$([^$]+)\$/g, (_, tex) =>
+    katex.renderToString(tex, { throwOnError: false }));
+}
+function select(i){
+  cur = i;
+  const L = LESSONS[i];
+  v.src = '../out/' + L.id + '/final.mp4';
+  document.getElementById('stem').innerHTML = '题干：' + math(L.problem.stem);
+  document.querySelectorAll('.tab').forEach((t,k)=>t.classList.toggle('on',k===i));
+  const cs = document.getElementById('chs'); cs.innerHTML = '';
+  L.chapters.forEach((c,k)=>{
+    const d = document.createElement('div'); d.className='ch'; d.dataset.k=k;
+    d.innerHTML = '<span class="no">'+(k+1)+'</span><span class="tt">'+c.title+
+      (c.subtitle?'<small>'+c.subtitle+'</small>':'')+'</span><span class="tm">'+fmt(c.start)+'</span>';
+    d.onclick = ()=>{ v.currentTime = c.start + 0.05; v.play(); };
+    cs.appendChild(d);
+  });
+  const P = L.problem;
+  document.getElementById('cards').innerHTML =
+    '<div class="card"><h3>已知条件</h3><ul>'+P.known.map(x=>'<li>'+math(x)+'</li>').join('')+'</ul></div>'+
+    '<div class="card"><h3>解题目标</h3><ul><li>'+math(P.goal)+'</li></ul></div>'+
+    '<div class="card"><h3>核心观察</h3><ul><li>'+math(P.core_observation)+'</li></ul></div>'+
+    '<div class="card ans"><h3>答案</h3><span class="v">'+math(P.answer)+'</span></div>';
+}
+v.addEventListener('timeupdate', ()=>{
+  const L = LESSONS[cur];
+  let k = 0;
+  L.chapters.forEach((c,i)=>{ if (v.currentTime >= c.start) k = i; });
+  document.querySelectorAll('.ch').forEach((d,i)=>d.classList.toggle('on',i===k));
+});
+LESSONS.forEach((L,i)=>{
+  const t = document.createElement('button'); t.className='tab'; t.textContent=L.title.replace('一题一课 · ','');
+  t.onclick=()=>select(i); document.getElementById('tabs').appendChild(t);
+});
+if (LESSONS.length) select(0);
+window.addEventListener('load', ()=>{ if (LESSONS.length) select(cur); });  // katex defer 就绪后重渲染
+</script>
+</body>
+</html>

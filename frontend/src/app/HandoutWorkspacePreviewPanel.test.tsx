@@ -126,7 +126,8 @@ describe("HandoutWorkspacePreviewPanel", () => {
     expect(html).toContain("当前讲义");
     expect(html).toContain("反比例函数基础题型");
     expect(html).toContain("校对结论");
-    expect(html).toContain("未返回");
+    // 组件自 87aee65 起把空校对结论归一显示为「未校对」，旧断言文案「未返回」在 HEAD 上已失效。
+    expect(html).toContain("未校对");
     expect(html).toContain("当前任务还没有结构化校对摘要");
     expect(html).toContain("学生版");
     expect(html).not.toContain("MODEL_CALL");

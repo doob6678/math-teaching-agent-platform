@@ -8,6 +8,7 @@ and the SSE stream is framed with typed Anthropic events.
 from __future__ import annotations
 
 import json
+import unittest
 
 from app import anthropic_compat
 
@@ -237,3 +238,68 @@ def test_openai_sse_data_lines_omits_done_on_truncated_stream():
     # 截断时仅 message_start 报过 input_tokens：末帧带已知 usage 但没有 finish_reason。
     assert decoded[-1]["usage"]["prompt_tokens"] == 5
     assert not decoded[-1]["choices"][0].get("finish_reason")
+
+
+class AnthropicImageBridgeTests(unittest.TestCase):
+    """OpenAI 多模态 content -> Anthropic image 块的桥接契约。
+
+    2026-09-06 探针结论：glm-5.3-flash 原生 image 块实测能看图，但旧桥接把
+    content list 用 str() 拍平，图片在传输层被静默销毁，导致"带图仍不能理解图片"。
+    本类锁定修复后的映射行为，防止回退。用 unittest 风格以便 python -m unittest 直跑。
+    """
+
+    def test_data_url_image_becomes_base64_block_and_text_kept(self):
+        # 最小 PNG 头段的 base64 仅作占位，断言只看桥接是否原样搬运 data 段。
+        payload = {
+            "model": "glm-5.3-flash",
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "讲解这页题图"},
+                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg=="}},
+                ],
+            }],
+        }
+        converted = anthropic_compat.build_messages_payload(payload)
+        blocks = converted["messages"][0]["content"]
+        self.assertEqual(blocks[0], {"type": "text", "text": "讲解这页题图"})
+        self.assertEqual(blocks[1], {"type": "image", "source": {
+            "type": "base64", "media_type": "image/png", "data": "iVBORw0KGgoAAAANSUhEUg=="}})
+
+    def test_jpeg_data_url_media_type_parsed(self):
+        # media_type 从 data URL header 解析，不能固定成 png——渲染端 contentType 决定该值。
+        payload = {
+            "model": "glm-5.3-flash",
+            "messages": [{
+                "role": "user",
+                "content": [{"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,/9j/4AAQ=="}}],
+            }],
+        }
+        block = anthropic_compat.build_messages_payload(payload)["messages"][0]["content"][0]
+        self.assertEqual(block["source"]["media_type"], "image/jpeg")
+        self.assertEqual(block["source"]["data"], "/9j/4AAQ==")
+
+    def test_http_image_url_uses_url_source(self):
+        payload = {
+            "model": "glm-5.3-flash",
+            "messages": [{
+                "role": "user",
+                "content": [{"type": "image_url", "image_url": {"url": "https://example.com/page.png"}}],
+            }],
+        }
+        block = anthropic_compat.build_messages_payload(payload)["messages"][0]["content"][0]
+        self.assertEqual(block, {"type": "image", "source": {
+            "type": "url", "url": "https://example.com/page.png"}})
+
+    def test_plain_string_content_stays_string(self):
+        # 纯文本轮行为不变：不能因为多模态分支把 str content 包成块数组。
+        payload = {
+            "model": "glm-5.3-flash",
+            "messages": [{"role": "user", "content": "二次函数顶点式"}],
+        }
+        converted = anthropic_compat.build_messages_payload(payload)
+        self.assertEqual(converted["messages"], [{"role": "user", "content": "二次函数顶点式"}])
+
+
+if __name__ == "__main__":
+    unittest.main()

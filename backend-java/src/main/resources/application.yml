@@ -86,7 +86,12 @@ math-agent:
     # Encrypted OAuth records require a deployment-owned 256-bit key; never ship a usable key in source control.
     token-encryption-key: ${MATH_AGENT_FEISHU_TOKEN_ENCRYPTION_KEY:}
   ai:
-    default-provider: ${MATH_AGENT_AI_DEFAULT_PROVIDER:deepseek}
+    # 2026-09-08 学生问答"思考乱码"修复：默认路由从 deepseek 切到 glm（默认模型 glm-5.3-flash，老板书面指令强调 flash）。
+    # 本次实测抓取 Java SSE 原始字节（curl --raw）：全链路 UTF-8 干净（0 个 U+FFFD、无 Latin-1 双重编码），
+    # 乱码来自 deepseek-v4-flash 自身 reasoning_content 的非确定性 token-salad（字符合法但内容不可读），
+    # 而 GLM 经 anthropic_compat 桥接的思考流可读（DB 持久化 reasoningTrace 复核）。deepseek 保留 enabled
+    # 作 fallback，仅从 primary 降位；讲义 handout 链路仍走各自 PREFERRED_PROVIDER 配置，不受此默认影响。
+    default-provider: ${MATH_AGENT_AI_DEFAULT_PROVIDER:glm}
     # Java only signs opaque route grants; provider keys and endpoints belong to ai-worker.
     route-grant-secret: ${MATH_AGENT_PROVIDER_ROUTE_GRANT_SECRET:}
     # The handout lease is 900 seconds and authorization/document curation precedes its first model call. Grants must
@@ -115,6 +120,8 @@ math-agent:
     glm:
       name: glm
       # GLM 走 Z.ai 的 Anthropic 兼容端点；密钥与 GLM_BASE_URL 只存在于 ai-worker，Java 仅签发路由元数据。
+      # 2026-09-08：容器部署由 docker-compose 显式注入 GLM_CHAT_MODEL=glm-5.3-flash（老板书面
+      # 指令强调 flash 变体），route 元数据必须与 worker 实调模型一致，故默认值同步。
       enabled: ${MATH_AGENT_PROVIDER_GLM_ENABLED:true}
       chat-model: ${GLM_CHAT_MODEL:glm-5.3-flash}
   teaching:
@@ -202,6 +209,22 @@ math-agent:
       enabled: ${MATH_AGENT_STUDENT_EXPLANATION_CONTEXT_CACHE_ENABLED:true}
       key-prefix: math-agent:student:conversation-context:v1
       ttl: 30m
+    student-explanation-write-behind:
+      # 连接池保护：SSE 公共事件逐条 insert 时，一轮讲解的 ai_delta 按 provider 分块可产生数百行写入、
+      # 峰值每秒数十次借还 Hikari 连接（上限 25）。开启后事件先写 Redis（每次 append 仅一个 EVAL，零 DB 连接），
+      # 后台按 fixedDelay 批量落库，一批只借还一次连接；终态事件（completed/error）与 run 行仍同步直写 MySQL。
+      enabled: ${MATH_AGENT_STUDENT_EXPLANATION_WRITE_BEHIND_ENABLED:true}
+      key-prefix: math-agent:student:explanation-events:v1
+      # 丢失窗口即此间隔：仅"Redis 数据丢失 且 事件尚未 flush"（默认 500ms）会丢中间事件——只影响断线重连
+      # 的补发文本，不影响讲解结果与历史；JVM 单独崩溃不丢，重启时 boot-flush 先排空 Redis 残留缓冲。
+      # Redis 故障自动降级为直写 MySQL（显式 id 与缓冲共用同一自增序列，不乱序），用户侧无报错。
+      flush-interval-ms: ${MATH_AGENT_STUDENT_EXPLANATION_WRITE_BEHIND_FLUSH_INTERVAL_MS:500}
+      # 单轮单 run 批量行数；阈值积压时下一轮继续排空。max-buffered-events 为单 run 缓冲上限，
+      # 超出即拒绝入缓冲并降级直写，防止 flush 长期失败时 Redis 内存无界增长。
+      batch-size: ${MATH_AGENT_STUDENT_EXPLANATION_WRITE_BEHIND_BATCH_SIZE:200}
+      max-buffered-events: ${MATH_AGENT_STUDENT_EXPLANATION_WRITE_BEHIND_MAX_BUFFERED_EVENTS:5000}
+      # 缓冲 TTL 只需覆盖 JVM 重启间隔（重连窗口仅 5 分钟）；过期视为放弃，MySQL 已有已 flush 部分。
+      buffer-ttl: ${MATH_AGENT_STUDENT_EXPLANATION_WRITE_BEHIND_BUFFER_TTL:6h}
   vector-index:
     # Local WSL Milvus is authenticated as well; the root credential is supplied only through the environment.
     enabled: true
@@ -413,6 +436,14 @@ math-agent:
     timeout-ms: ${MATH_AGENT_PYTHON_HANDOUT_TIMEOUT_MS:885000}
     connect-timeout-ms: ${MATH_AGENT_PYTHON_HANDOUT_CONNECT_TIMEOUT_MS:5000}
     lease-safety-margin-ms: ${MATH_AGENT_PYTHON_HANDOUT_LEASE_SAFETY_MARGIN_MS:15000}
+  animated-lesson:
+    # 动画讲题渲染是分钟级长任务（实测 5~25 分钟，冻结契约 2026-09-09 要求默认 ≥1800s）。
+    # 读超时与 python-agent 分离：交互式 workload 仍 120s，不能为了动画把全链路超时拉长；
+    # 调用运行在 Agent Worker 租约心跳内，900s 租约会被持续续租，不构成瓶颈。
+    timeout-ms: ${MATH_AGENT_ANIMATED_LESSON_TIMEOUT_MS:1800000}
+    # worker 产物目录（storyboard/final.mp4/chapters.json）。compose 将宿主 ./output/animated-lessons
+    # 以同一路径挂进 ai-worker 与 backend；本机直跑 Java 时用环境变量指到同一宿主目录。
+    worker-output-root: ${MATH_AGENT_ANIMATED_LESSON_OUTPUT_ROOT:/app/data/animated-lessons}
   knowledge:
     graph-spine:
       seed-enabled: true

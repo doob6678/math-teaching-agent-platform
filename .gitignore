@@ -95,3 +95,20 @@ benchmarks/config.json
 archive/
 性能提升/
 frontend/tsconfig.tsbuildinfo
+
+# LaTeX Studio build artifacts and review outputs
+tools/latex-studio/workspace/.latexstudio-build/
+tools/latex-studio/review-output/
+tools/latex-studio/logs/
+
+# 动画讲题原型：渲染成片/参考视频/抽帧是二进制大文件，源码、分镜 JSON 与 chapters.json 入库即可复核
+tools/animated-lesson/out/
+tools/animated-lesson/reference/
+tools/animated-lesson/frames/
+output/animated-lessons/
+# 一次性会话产物（探活演练日志、smoke 请求体）与临时调研目录
+ai-worker-python/smoke_body.json
+ai-worker-python/smoke_result.json
+.local-tmp/
+.research-tmp/
+logs/

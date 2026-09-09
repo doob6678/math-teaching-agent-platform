@@ -53,6 +53,7 @@ from app.student_explanation_graph import (
 )
 from app.streaming_runtime import AgentStreamingRuntime
 from app.latex_repair_runtime import LatexRepairRequest, LatexRepairRuntime
+from app.animated_lesson_runtime import AnimatedLessonRunRequest, AnimatedLessonRuntime
 from app.tokenizer import count_texts
 from fastapi.responses import JSONResponse, StreamingResponse
 import json
@@ -402,6 +403,23 @@ def latex_repair_sync(payload: LatexRepairRequest) -> dict:
     Java 拿到 REPAIRED 后仍需重新编译成功才会发布。
     """
     return latex_repair_runtime().repair(payload)
+
+
+@lru_cache(maxsize=1)
+def animated_lesson_runtime() -> AnimatedLessonRuntime:
+    """一题一课动画讲题执行体：分镜生成复用 migrated workload 的 provider 路由与 UsageLedger
+    记账（chat_messages 注入），渲染走 tools/animated-lesson 确定性管线的子进程。"""
+    return AnimatedLessonRuntime(chat=migrated_workload_runtime().chat_result)
+
+
+@app.post("/v1/animated-lessons/sync", dependencies=[Depends(require_worker_key)])
+def animated_lesson_sync(payload: AnimatedLessonRunRequest) -> dict:
+    """题干 → AI 分镜（封闭算子集+校验回喂自修）→ Manim 渲染成片，返回产物路径与章节表。
+
+    长任务（分钟级），Java 侧必须走 agent_worker_task 异步队列调用，不走 SSE。
+    render=false 或带 storyboard 时分别跳过生成/渲染，供分段调试与外部投喂分镜。
+    """
+    return animated_lesson_runtime().run(payload)
 
 
 def _submit_handout_once(payload: HandoutRunRequest) -> Future:

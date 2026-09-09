@@ -59,9 +59,12 @@ public class AiProviderCatalog {
                         providerOrder(defaultProvider.name(), left.name()),
                         providerOrder(defaultProvider.name(), right.name())))
                 .toList();
+        Provider visionDefault = visionDefaultProvider().orElse(null);
         return new ModelCatalog(
                 defaultProvider.name(),
                 defaultProvider.chatModel(),
+                visionDefault == null ? "" : visionDefault.name(),
+                visionDefault == null ? "" : visionDefault.chatModel(),
                 providers.stream().map(ModelProvider::name).toList(),
                 providers);
     }
@@ -77,6 +80,72 @@ public class AiProviderCatalog {
         return enabledProviders().stream()
                 .filter(provider -> provider.name().equals(normalized))
                 .findFirst();
+    }
+
+    /**
+     * 实测通过"纯色图片→正确报色"探针的视觉模型编码（2026-09-06 两轮探针）。
+     *
+     * <p>deepseek-v4-flash/pro 官方端点收到 image_url 内容块返回 200+空 content（静默丢图），
+     * 带图请求绝不能路由到它们；gpt-5.4 系列当时在网关已无渠道，未列入。glm-5.3-flash 第一轮经
+     * anthropic_compat 桥接失败，第二轮直发 Anthropic 原生 image 块实测能看图——失败原因是桥接层
+     * 当时把多模态部件 str() 拍平销毁了图片，桥接已补转换，故 glm 进入白名单。
+     * 未实测通过的模型编码不得凭猜测进入该集合。</p>
+     */
+    private static final Set<String> VISION_MODEL_CODES = Set.of(
+            "gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol", "gpt-5.5", "glm-5.3-flash");
+
+    /**
+     * 判断模型编码是否具备已实测验证的图片输入能力。
+     *
+     * @param modelCode 提供商模型编码
+     * @return true 表示该模型可接收 image_url 内容块
+     */
+    public static boolean supportsVision(String modelCode) {
+        return VISION_MODEL_CODES.contains(normalize(modelCode));
+    }
+
+    /**
+     * 查找带图请求的默认路由：按启用顺序找第一个默认模型支持视觉的提供商；若某提供商默认模型不支持
+     * 视觉但允许列表中有已验证视觉模型，则提升到该模型。
+     *
+     * @return 视觉默认路由；没有任何启用提供商具备视觉能力时为空
+     */
+    public Optional<Provider> visionDefaultProvider() {
+        for (Provider provider : enabledProviders()) {
+            if (supportsVision(provider.chatModel())) {
+                return Optional.of(provider);
+            }
+            Optional<String> visionModel = allowedModels(provider.name()).stream()
+                    .filter(AiProviderCatalog::supportsVision)
+                    .findFirst();
+            if (visionModel.isPresent()) {
+                return Optional.of(new Provider(provider.name(), visionModel.get()));
+            }
+        }
+        return Optional.empty();
+    }
+
+    /**
+     * 带图请求的全部候选路由：每个启用提供商的每个已验证视觉模型，按提供商启用顺序、
+     * 列表内顺序排列。primary 之外的条目作 fallback，使视觉轮换不依赖单一模型配额。
+     *
+     * @return 视觉路由候选（provider+model 去重）
+     */
+    public List<Provider> visionRoutes() {
+        List<Provider> routes = new java.util.ArrayList<>();
+        for (Provider provider : enabledProviders()) {
+            if (supportsVision(provider.chatModel())) {
+                routes.add(provider);
+            }
+            for (String model : allowedModels(provider.name())) {
+                boolean seen = routes.stream().anyMatch(
+                        route -> route.name().equals(provider.name()) && route.chatModel().equals(model));
+                if (supportsVision(model) && !seen) {
+                    routes.add(new Provider(provider.name(), model));
+                }
+            }
+        }
+        return List.copyOf(routes);
     }
 
     /**
@@ -195,7 +264,7 @@ public class AiProviderCatalog {
      */
     private static List<ModelOption> allowedModelOptions(String providerName) {
         return allowedModels(providerName).stream()
-                .map(model -> new ModelOption(model, modelLevel(model), priceTier(model)))
+                .map(model -> new ModelOption(model, modelLevel(model), priceTier(model), supportsVision(model)))
                 .toList();
     }
 
@@ -274,12 +343,16 @@ public class AiProviderCatalog {
      *
      * @param defaultProviderName 后端默认提供商
      * @param defaultModelCode 后端默认模型
+     * @param visionDefaultProviderName 带图请求的默认提供商；无视觉能力时为空串
+     * @param visionDefaultModelCode 带图请求的默认模型；无视觉能力时为空串
      * @param fallbackProviderOrder 提供商轮换顺序
      * @param providers 已启用的提供商及其模型选项
      */
     public record ModelCatalog(
             String defaultProviderName,
             String defaultModelCode,
+            String visionDefaultProviderName,
+            String visionDefaultModelCode,
             List<String> fallbackProviderOrder,
             List<ModelProvider> providers) {
     }
@@ -305,7 +378,8 @@ public class AiProviderCatalog {
      * @param modelCode 提供商模型编码
      * @param modelLevel 粗粒度模型能力标签
      * @param priceTier 粗粒度价格标签
+     * @param vision 是否已实测支持图片输入；带图请求只能路由到该标记为 true 的模型
      */
-    public record ModelOption(String modelCode, String modelLevel, String priceTier) {
+    public record ModelOption(String modelCode, String modelLevel, String priceTier, boolean vision) {
     }
 }

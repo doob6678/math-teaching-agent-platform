@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>一题一课 · 交互式讲题动画</title>
+<!-- KaTeX 本地 vendor（复制自 frontend/node_modules/katex/dist），无构建、离线可用 -->
+<link rel="stylesheet" href="vendor/katex/katex.min.css">
+<script src="vendor/katex/katex.min.js"></script>
+<link rel="stylesheet" href="player.css">
+</head>
+<body>
+  <!-- 顶部：红黑大标题 + 章节进度（对齐参考视频 Tom张数学 的浅色纸面排版） -->
+  <header id="topbar">
+    <div id="title"></div>
+    <div id="chapters"></div>
+    <div id="lesson-tabs"></div>
+  </header>
+
+  <main id="stage">
+    <!-- 左：几何画布（SVG 逐笔绘制 + HTML 标签层） -->
+    <section id="canvas-wrap">
+      <div id="chapter-chip"></div>
+      <svg id="board" viewBox="0 0 1000 720" preserveAspectRatio="xMidYMid meet"></svg>
+      <div id="labels"></div>
+      <div id="banner"></div>
+      <div id="answer-card"></div>
+      <div id="click-hint">点击画面 / → 键：下一步</div>
+    </section>
+    <!-- 右：题干卡 + 解题笔记本（逐行累积） -->
+    <aside id="notebook">
+      <div id="stem-card"></div>
+      <div id="notes"></div>
+    </aside>
+  </main>
+
+  <!-- 底部字幕带 -->
+  <footer id="caption-bar"><div id="caption"></div></footer>
+
+  <!-- 控制条 -->
+  <div id="controls">
+    <button id="btn-prev" title="上一步（←）">◀</button>
+    <span id="step-indicator">0 / 0</span>
+    <button id="btn-next" title="下一步（→ / 空格 / 点击画面）">下一步 ▶</button>
+    <button id="btn-replay" title="重播本课">↺</button>
+  </div>
+
+  <!-- 编译器生成的课程数据（JSONP 风格，避免 fetch/CORS 差异） -->
+  <script src="data/tangent-min.js"></script>
+  <script src="data/tangent-angle.js"></script>
+  <script src="player.js"></script>
+</body>
+</html>

@@ -58,6 +58,9 @@ public class TextbookRetrievalService {
     private static final int MIN_INFERRED_TITLE_OVERLAP = 2;
     private static final int MAX_INFERRED_TITLE_CHARS = 48;
     private static final double INFERRED_TITLE_OVERLAP_RATIO = 0.5d;
+    /** 相似题图：每次返回的命中封顶与每段块/邻接正文的字符上限，控制回喂模型的证据体积。 */
+    private static final int SIMILAR_FIGURE_MAX_HITS = 5;
+    private static final int SIMILAR_FIGURE_BLOCK_CHAR_LIMIT = 500;
     /** 公式、编号和函数名是短查询中最可靠的词法信号，命中后先保障 BM25 候选进入粗融合。 */
     private static final Pattern LEXICAL_QUERY_SIGNAL = Pattern.compile(
             "(?:=|\\^|_|\\{|\\}|√|π|∫|≤|≥|\\b(?:sin|cos|tan|log|ln)\\b|\\d+\\.\\d+|第[一二三四五六七八九十百千万0-9]+[章节])",
@@ -891,6 +894,113 @@ public class TextbookRetrievalService {
                     .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
             hits.stream().filter(hit -> seenChunks.add(hit.chunkId())).forEach(existing::add);
         });
+    }
+
+    /**
+     * 相似题图检索：以本轮学生已授权上传的题图为查询，走 CLIP→Milvus 图像集合召回最相似的教材页图，
+     * 再用内存语料快照补齐“命中块正文 + 左右相邻块正文”。
+     *
+     * <p>召回只由向量分数决定（k≤5），不含任何题型/主题分支；Java 只做鉴权、编排与受控图片引用（docId/pageNo
+     * → /api/resources/textbooks 物化 URL），教学语义仍交给 AI，符合检索链路架构边界。</p>
+     *
+     * @param processedBooksRoot 后端持有的教材语料根目录，不暴露给 AI 或前端
+     * @param imageDataUrl 本轮已授权题图的 data URL/base64（Java 侧解析，非文件路径）
+     * @param limit 期望返回数量，封顶 {@value #SIMILAR_FIGURE_MAX_HITS}
+     * @return 每条命中含文档、页码、块与左右相邻正文、后端受控图片 URL 与相似度
+     */
+    public List<SimilarFigureHit> searchSimilarFigures(Path processedBooksRoot, String imageDataUrl, int limit) {
+        if (imageDataUrl == null || imageDataUrl.isBlank()) {
+            return List.of();
+        }
+        if (pageImageSearchService == null) {
+            throw new IllegalStateException("CLIP 教材页面图像检索未配置");
+        }
+        int top = Math.max(1, Math.min(SIMILAR_FIGURE_MAX_HITS, limit));
+        TextbookPageImageSearchResponse response = pageImageSearchService.search(
+                new TextbookPageImageSearchRequest(null, imageDataUrl.strip(), top, List.of()));
+        List<TextbookPageImageSearchHit> imageHits = response.hits() == null ? List.of() : response.hits();
+        if (imageHits.isEmpty()) {
+            return List.of();
+        }
+        // 复用与 search() 相同的内存语料快照，按 docId#pageNo 归并块正文，避免逐张命中重读磁盘。
+        List<TextbookChunk> chunks = loadCorpus(processedBooksRoot.toAbsolutePath().normalize()).chunks();
+        Map<String, List<TextbookChunk>> chunksByDocPage = new LinkedHashMap<>();
+        for (TextbookChunk chunk : chunks) {
+            if (chunk == null || chunk.docId() == null || chunk.docId().isBlank()) {
+                continue;
+            }
+            chunksByDocPage.computeIfAbsent(chunk.docId() + "#" + chunk.pageNo(), ignored -> new ArrayList<>()).add(chunk);
+        }
+        List<SimilarFigureHit> hits = new ArrayList<>();
+        for (TextbookPageImageSearchHit imageHit : imageHits) {
+            String docId = textOrFallback(imageHit.docId(), "");
+            int pageNo = imageHit.pageNo();
+            if (docId.isBlank() || pageNo <= 0) {
+                continue;
+            }
+            hits.add(new SimilarFigureHit(
+                    imageHit.score(),
+                    docId,
+                    textOrFallback(imageHit.bookName(), ""),
+                    textOrFallback(imageHit.chapterPath(), ""),
+                    pageNo,
+                    textOrFallback(imageHit.printedPageNo(), ""),
+                    textOrFallback(imageHit.sectionTitle(), ""),
+                    limitedBlockText(chunksByDocPage.get(docId + "#" + pageNo), imageHit.text()),
+                    limitedBlockText(chunksByDocPage.get(docId + "#" + (pageNo - 1)), ""),
+                    limitedBlockText(chunksByDocPage.get(docId + "#" + (pageNo + 1)), ""),
+                    textOrFallback(imageHit.imageUri(), "")));
+            if (hits.size() >= top) {
+                break;
+            }
+        }
+        return List.copyOf(hits);
+    }
+
+    /** 拼接同一页的块正文并封顶字符数；命中页无解析块时回退页图索引自带的页文本，绝不编造内容。 */
+    private static String limitedBlockText(List<TextbookChunk> pageChunks, String fallback) {
+        StringBuilder builder = new StringBuilder();
+        if (pageChunks != null) {
+            for (TextbookChunk chunk : pageChunks) {
+                String value = textOrFallback(chunk.text(), "");
+                if (value.isBlank()) {
+                    continue;
+                }
+                if (!builder.isEmpty()) {
+                    builder.append('\n');
+                }
+                builder.append(value);
+                if (builder.length() >= SIMILAR_FIGURE_BLOCK_CHAR_LIMIT) {
+                    break;
+                }
+            }
+        }
+        String merged = builder.toString().strip();
+        if (merged.isBlank()) {
+            merged = textOrFallback(fallback, "");
+        }
+        return merged.length() > SIMILAR_FIGURE_BLOCK_CHAR_LIMIT
+                ? merged.substring(0, SIMILAR_FIGURE_BLOCK_CHAR_LIMIT)
+                : merged;
+    }
+
+    /**
+     * 相似题图检索的单条命中：面向学生 ReAct 的紧凑证据，含命中块与左右相邻正文以及后端受控图片 URL。
+     *
+     * @param imageUri 后端持有的教材页图 URL（/api/resources/textbooks/...），前端据此授权阅览，不含文件系统路径
+     */
+    public record SimilarFigureHit(
+            double score,
+            String docId,
+            String bookName,
+            String chapterPath,
+            int pageNo,
+            String printedPageNo,
+            String sectionTitle,
+            String blockText,
+            String prevBlockText,
+            String nextBlockText,
+            String imageUri) {
     }
 
     private static TextbookSearchHit clipCoarseHit(TextbookChunk chunk, TextbookPageImageSearchHit imageHit) {

@@ -1,0 +1,109 @@
+\documentclass[border=10pt]{standalone}
+\usepackage{tikz}
+\usetikzlibrary{calc,angles,quotes,decorations.markings}
+
+\begin{document}
+
+\pgfmathsetmacro{\side}{5}
+\pgfmathsetmacro{\theta}{110}
+\pgfmathsetmacro{\phi}{-110}
+\pgfmathsetmacro{\tau}{0.42}
+
+\pgfmathsetmacro{\Bx}{0}
+\pgfmathsetmacro{\By}{0}
+\pgfmathsetmacro{\Cx}{\side}
+\pgfmathsetmacro{\Cy}{0}
+
+\pgfmathsetmacro{\Ax}{\side*cos(\theta)}
+\pgfmathsetmacro{\Ay}{\side*sin(\theta)}
+\pgfmathsetmacro{\Dx}{\Ax+\Cx}
+\pgfmathsetmacro{\Dy}{\Ay+\Cy}
+
+\pgfmathsetmacro{\Ex}{\tau*\Cx}
+\pgfmathsetmacro{\Ey}{0}
+
+\pgfmathsetmacro{\ux}{\Ax-\Ex}
+\pgfmathsetmacro{\uy}{\Ay-\Ey}
+\pgfmathsetmacro{\Fx}{\Ex+cos(\phi)*\ux-sin(\phi)*\uy}
+\pgfmathsetmacro{\Fy}{\Ey+sin(\phi)*\ux+cos(\phi)*\uy}
+
+\tikzset{
+  side mark/.style={
+    postaction={
+      decorate,
+      decoration={
+        markings,
+        mark=at position .5 with {
+          \draw[thick] (0,-2pt)--(0,2pt);
+        }
+      }
+    }
+  },
+  equal mark/.style={
+    postaction={
+      decorate,
+      decoration={
+        markings,
+        mark=at position .5 with {
+          \draw[thick] (0,-3pt)--(0,3pt);
+          \draw[thick] (4pt,-3pt)--(4pt,3pt);
+        }
+      }
+    }
+  }
+}
+
+\begin{tikzpicture}[scale=0.9, every node/.style={font=\small}]
+  \coordinate (A) at (\Ax,\Ay);
+  \coordinate (B) at (\Bx,\By);
+  \coordinate (C) at (\Cx,\Cy);
+  \coordinate (D) at (\Dx,\Dy);
+  \coordinate (E) at (\Ex,\Ey);
+  \coordinate (F) at (\Fx,\Fy);
+
+  \draw[thick, side mark] (A)--(B);
+  \draw[thick, side mark] (B)--(C);
+  \draw[thick, side mark] (C)--(D);
+  \draw[thick, side mark] (D)--(A);
+
+  \draw[thick, equal mark] (A)--(E);
+  \draw[thick, equal mark] (E)--(F);
+
+  \draw[thick] (C)--(F);
+
+  \foreach \P in {A,B,C,D,E,F}
+    \fill (\P) circle (1.5pt);
+
+  \node[above left=3pt] at (A) {$A$};
+  \node[below left=3pt] at (B) {$B$};
+  \node[below right=3pt] at (C) {$C$};
+  \node[above right=3pt] at (D) {$D$};
+  \node[below=4pt] at (E) {$E$};
+  \node[above right=3pt] at (F) {$F$};
+
+  \pic[
+    draw=red,
+    red,
+    "$110^\circ$",
+    angle radius=8mm,
+    angle eccentricity=1.25
+  ] {angle=C--B--A};
+
+  \pic[
+    draw=red,
+    red,
+    "$110^\circ$",
+    angle radius=8mm,
+    angle eccentricity=1.25
+  ] {angle=F--E--A};
+
+  \pic[
+    draw=red,
+    red,
+    "$?$",
+    angle radius=9mm,
+    angle eccentricity=1.25
+  ] {angle=F--C--D};
+\end{tikzpicture}
+
+\end{document}

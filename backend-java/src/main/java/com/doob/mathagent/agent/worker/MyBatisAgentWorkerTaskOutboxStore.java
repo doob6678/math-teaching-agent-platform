@@ -8,9 +8,9 @@ import com.doob.mathagent.agent.mapper.AgentWorkerTaskMapper;
 import com.doob.mathagent.agent.mapper.AgentWorkerTaskOutboxEventMapper;
 import java.time.Duration;
 import java.time.Instant;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Repository;
 
@@ -22,11 +22,14 @@ public class MyBatisAgentWorkerTaskOutboxStore implements AgentWorkerTaskOutboxS
     private static final String PUBLISHED = "PUBLISHED";
     private final AgentWorkerTaskOutboxEventMapper outboxMapper;
     private final AgentWorkerTaskMapper taskMapper;
+    private final ApplicationEventPublisher events;
 
     public MyBatisAgentWorkerTaskOutboxStore(
-            AgentWorkerTaskOutboxEventMapper outboxMapper, AgentWorkerTaskMapper taskMapper) {
+            AgentWorkerTaskOutboxEventMapper outboxMapper, AgentWorkerTaskMapper taskMapper,
+            ApplicationEventPublisher events) {
         this.outboxMapper = outboxMapper;
         this.taskMapper = taskMapper;
+        this.events = events;
     }
 
     @Override
@@ -45,31 +48,33 @@ public class MyBatisAgentWorkerTaskOutboxStore implements AgentWorkerTaskOutboxS
         try {
             outboxMapper.insert(event);
         } catch (DuplicateKeyException ignored) {
-            // The unique task/version key makes reconciliation and concurrent recovery idempotent.
+            // The unique task/version key makes reconciliation and concurrent recovery idempotent;
+            // no wake is needed because the pre-existing row is already on the publisher's radar.
+            return;
         }
+        // Wake-on-commit latency optimization: AgentWorkerTaskOutboxScheduler listens for this event and runs
+        // an immediate delivery round after the enclosing transaction commits, so a fresh task does not wait
+        // for the next 1s poll. Publishing the event inside the transaction is safe: TransactionalEventListener
+        // only dispatches it on successful commit, so a rolled-back enqueue never triggers a phantom round.
+        events.publishEvent(new AgentWorkerOutboxWakeEvent(task.taskId()));
     }
 
     @Override
     public List<AgentWorkerTaskOutboxEvent> claimReady(
             String publisherId, Instant now, Duration leaseDuration, int limit) {
         int safeLimit = Math.max(1, limit);
-        List<AgentWorkerTaskOutboxEvent> claimed = new ArrayList<>();
-        List<AgentWorkerTaskOutboxEventEntity> candidates = outboxMapper.selectReadyPending(now, safeLimit);
-        for (AgentWorkerTaskOutboxEventEntity candidate : candidates) {
-            int updated = outboxMapper.update(null, new LambdaUpdateWrapper<AgentWorkerTaskOutboxEventEntity>()
-                    .eq(AgentWorkerTaskOutboxEventEntity::getEventId, candidate.getEventId())
-                    .eq(AgentWorkerTaskOutboxEventEntity::getStatus, PENDING)
-                    .le(AgentWorkerTaskOutboxEventEntity::getNextAttemptAt, now)
-                    .set(AgentWorkerTaskOutboxEventEntity::getStatus, PUBLISHING)
-                    .set(AgentWorkerTaskOutboxEventEntity::getLockedBy, publisherId)
-                    .set(AgentWorkerTaskOutboxEventEntity::getPublishLeaseUntil, now.plus(leaseDuration))
-                    .setSql("publish_attempt = publish_attempt + 1"));
-            if (updated == 1) {
-                AgentWorkerTaskOutboxEventEntity locked = outboxMapper.selectById(candidate.getEventId());
-                claimed.add(toEvent(locked));
-            }
+        // One batch UPDATE claims the whole ready window: the status='PENDING' predicate still gives CAS
+        // semantics, so a row taken by a concurrent publisher simply stops matching (~2 round trips for the
+        // batch instead of one UPDATE plus one read-back per row). The read-back selects by locked_by, so it
+        // only returns rows stamped by this exact claimant: publisherId must be unique per process, which
+        // AgentWorkerTaskOutboxScheduler guarantees by appending a per-instance nonce to the configured id.
+        int claimedCount = outboxMapper.claimBatchPending(publisherId, now, now.plus(leaseDuration), safeLimit);
+        if (claimedCount == 0) {
+            return List.of();
         }
-        return List.copyOf(claimed);
+        return outboxMapper.selectClaimed(publisherId).stream()
+                .map(MyBatisAgentWorkerTaskOutboxStore::toEvent)
+                .toList();
     }
 
     @Override

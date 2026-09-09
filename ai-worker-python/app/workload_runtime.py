@@ -34,8 +34,40 @@ MATH_MARKUP_OUTPUT_CONTRACT = (
     "例如标题写“函数 $f(x)$ 的定义域”，不得写“函数 f(x) 的定义域”。"
     "分式一律写 $\\frac{分子}{分母}$，根式一律写 $\\sqrt{被开方整体}$；不得用 /、√、^、上标字符"
     "或裸露数学符号代替 LaTeX 结构。不要在数学公式定界符外拆开一个表达式。"
+    "JSON 字符串内的每个 LaTeX 反斜杠都必须双写（$\\frac 在 JSON 中写成 $\\\\frac），"
+    "禁止出现反斜杠后接非法转义字符的写法。"
 )
 logger = logging.getLogger(__name__)
+
+# JSON 合法转义字符（" \ / b f n r t u），供 _repair_json_escapes 判断反斜杠是否带非法后继。
+_JSON_ESCAPE_CHARS = set('"\\/bfnrtu')
+
+
+def _repair_json_escapes(snippet: str) -> str:
+    """把模型直写的非法 JSON 转义 \\X 补成合法的双写 \\\\X，返回可再解析的候选文本。
+
+    从左到右按“转义对”消费：反斜杠后跟合法转义字符时连同后一字符一起跳过（正确双写的
+    \\\\frac、\\" 不会二次受损），否则视为模型把 LaTeX 反斜杠写漏了，补一个反斜杠。
+    只在严格解析失败后作为兜底调用；修复后仍失败由调用方照常 422，不做语义猜测。
+    """
+    out: list[str] = []
+    i = 0
+    length = len(snippet)
+    while i < length:
+        ch = snippet[i]
+        if ch == "\\":
+            nxt = snippet[i + 1] if i + 1 < length else ""
+            if nxt and nxt in _JSON_ESCAPE_CHARS:
+                out.append(ch)
+                out.append(nxt)
+                i += 2
+                continue
+            out.append("\\\\")
+            i += 1
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
 
 
 def redacted_sse_frame_prefix(value: str) -> str:
@@ -46,6 +78,27 @@ def redacted_sse_frame_prefix(value: str) -> str:
         r"\1<redacted>", normalized,
     )
     return normalized[:MAX_SSE_FRAME_PREFIX_LENGTH]
+
+
+def _retry_after_seconds(headers: Any) -> int | None:
+    """把上游 Retry-After 头解析为受限的正整数秒；无法解析或缺失返回 None。
+
+    用于 429 透传时附带退避提示。仅支持 delta-seconds 形式（HTTP-date 形式少见且依赖时钟，忽略），
+    并夹到 [0, 120]，避免上游异常值导致客户端长时间挂起。
+    """
+    if not headers:
+        return None
+    try:
+        raw = headers.get("Retry-After") or headers.get("retry-after")
+    except AttributeError:
+        return None
+    if raw is None:
+        return None
+    try:
+        seconds = int(float(str(raw).strip()))
+    except (TypeError, ValueError):
+        return None
+    return max(0, min(seconds, 120))
 
 
 class AuthorizedKnowledgePoint(BaseModel):
@@ -92,6 +145,9 @@ REACT_TOOL_CATALOG: dict[str, str] = {
     "match_knowledge_graph": "把题目知识点匹配到学科知识图谱主干，用于说明前置、后续与相关知识点关系。",
     "search_teacher_resources": "检索本次运行已授权的教师资料（讲义、题库、课件）正文，"
                                 "题目出处、配套练习与教师讲解素材需要这类外部事实时才能取到。",
+    "search_similar_figures": "以本轮学生上传的题图为查询，检索已入库教材中与该图相似或相同的题图/页面，"
+                              "返回其所在教材、页码、正文块以及左右相邻正文块内容与配图地址。"
+                              "当题目含图形、学生问“这个图/这道题教材里有没有、出自哪一页、有无相似题”时才能取到。",
 }
 
 
@@ -109,9 +165,12 @@ class StudentExplanationRunRequest(BaseModel):
     mode: Literal["react", "compose"] = "compose"
     problem: str = Field(min_length=1, max_length=8_000)
     evidence: list[ExplanationEvidence] = Field(default_factory=list, max_length=MAX_SOURCE_COUNT)
-    availableTools: list[Literal["search_textbook", "match_knowledge_graph", "search_teacher_resources"]] = Field(
+    # 学生带题图的轮次，Java 会额外签发 search_similar_figures；上限 5 覆盖全部工具，避免 4 个工具时校验失败。
+    availableTools: list[Literal[
+        "search_textbook", "match_knowledge_graph", "search_teacher_resources", "search_similar_figures",
+    ]] = Field(
         default_factory=list,
-        max_length=3,
+        max_length=5,
     )
     observations: list[str] = Field(default_factory=list, max_length=12)
     imageDataUrl: str = Field(default="", max_length=12_000_000)
@@ -329,13 +388,24 @@ class MigratedWorkloadRuntime:
         provider = ""
         model = ""
         provider_attempt = 1
+        streamed_attempt = 0
         try:
             try:
                 for item in self._stream_call_json(
                         request.runId, request.providerRoute, messages, require_json_object=request.mode == "compose",
                         # 两种模式都把 provider 原始 JSON 增量实时上抛：Java 投影层只提取 title/summary/items
                         # 文本字段，学生不会看到 JSON 语法。此前 compose 吞掉增量导致首字要等整包完成（9 秒级）。
-                        emit_visible_content=True):
+                        emit_visible_content=True,
+                        # 2026-09-08：react 模式也启用流尾 JSON 终检（不强制 response_format，兼容 markdown
+                        # 围栏输出），坏 JSON 在 _stream_call_json 内换 provider 重试，不再流到外层才 422。
+                        validate_terminal_json=True):
+                    item_attempt = int(item.get("attempt", provider_attempt))
+                    if item_attempt != streamed_attempt:
+                        # 新一次 provider attempt：上一次尝试的半截增量作废，必须清空累计，
+                        # 否则终稿解析把两次尝试拼成一段，重试成功也救不回 422。
+                        content_parts.clear()
+                        reasoning_parts.clear()
+                        streamed_attempt = item_attempt
                     provider = item.get("provider", provider)
                     model = item.get("model", model)
                     provider_attempt = int(item.get("attempt", provider_attempt))
@@ -364,12 +434,27 @@ class MigratedWorkloadRuntime:
                 # the existing JSON and card/citation validators can still establish a complete safe result.
                 self._json_object(raw)
             raw = "".join(content_parts)
-            parsed = self._json_object(raw)
+            try:
+                parsed = self._json_object(raw)
+            except HTTPException:
+                if request.mode == "compose":
+                    raise
+                # 2026-09-08：planner 重试后仍给不出合法 JSON 时降级为 planner-only final（空卡片），
+                # 与同步路径 _react_student_explanation 同一策略：让 Java 进入 compose 校验回退拿到
+                # 真实讲解，而不是 422 掐死整轮（学生看到的是换通道继续，不是“没有可用通道”）。
+                parsed = {"decision": "final"}
             result = self._result_from_stream(request.runId, provider, model, usage, messages, raw, provider_attempt)
             decision = "final" if request.mode == "compose" else str(parsed.get("decision") or "final").strip().lower()
             if decision == "final":
+                try:
+                    final_payload = self._normalize_explanation_cards(parsed, request.evidence)
+                except HTTPException:
+                    if request.mode == "compose":
+                        # compose 的卡片就是终稿，Java 没有下游回退；校验不过必须如实报错，不得空卡降级。
+                        raise
+                    final_payload = {"conversationTitle": "", "cards": []}
                 response = {"status": "COMPLETED", "decision": "final", "tools": [], "queries": [],
-                            **self._normalize_explanation_cards(parsed, request.evidence),
+                            **final_payload,
                             "usage": result.usage(), "providerName": provider, "modelCode": model}
             else:
                 allowed = list(dict.fromkeys(request.availableTools))
@@ -386,10 +471,15 @@ class MigratedWorkloadRuntime:
 
     def _stream_call_json(
             self, run_id: str, route: ProviderRoute, messages: list[dict[str, Any]], require_json_object: bool = False,
-            emit_visible_content: bool = True):
+            emit_visible_content: bool = True, validate_terminal_json: bool = False):
         failures = []
         provider_attempts = max(1, int(os.getenv("MATH_AGENT_STUDENT_EXPLANATION_MODEL_ATTEMPTS", "2")))
         retry_backoff_seconds = max(0.0, float(os.getenv("MATH_AGENT_STUDENT_EXPLANATION_RETRY_BACKOFF_SECONDS", "1.0")))
+        # 2026-09-09 稳定性修复：provider 侧 429（限流）在重试/回退全部用尽后必须如实透传为 429，而不是被
+        # 末尾统一的 503 吞掉。503 会让 Java 与客户端误判为"通道不可用"而错误换路或告警，429 才是可退避重试
+        # 的正确语义。仅在确实观测到上游 429 时改变终态码，其它失败仍保持 503，不影响既有重试路径。
+        saw_rate_limit = False
+        rate_limit_retry_after_seconds: int | None = None
         for provider_index, selection in enumerate([route.primary, *route.fallbacks]):
             resolved = provider_profiles.profile(selection.name)
             api_key, base_url = provider_profiles.credentials(selection.name)
@@ -462,7 +552,10 @@ class MigratedWorkloadRuntime:
                                     if emit_visible_content:
                                         visible_output = True
                                     yield {"provider": selection.name, "model": selection.model, "attempt": attempt, "content": str(text)}
-                        if require_json_object:
+                        if require_json_object or validate_terminal_json:
+                            # 2026-09-08：react 规划器也纳入终检。GLM flash 偶发直出非法 JSON（非法 \ 转义、
+                            # 括号失衡），旧逻辑 react 不校验流尾，坏内容一路 yield 到外层才 422、整轮终止；
+                            # 现在与 compose 同口径：坏 JSON 在换 provider 前就被拦下重试。
                             try:
                                 self._json_object("".join(content_parts))
                             except HTTPException as exc:
@@ -476,6 +569,12 @@ class MigratedWorkloadRuntime:
                     status = exc.response.status_code if exc.response is not None else 0
                     error = f"HTTP_{status}"
                     retryable = status == 429 or status >= 500
+                    if status == 429:
+                        # 记录限流事实与 Retry-After 提示，供终态透传；只取首个非空整数秒，异常值忽略不阻断。
+                        saw_rate_limit = True
+                        if rate_limit_retry_after_seconds is None:
+                            rate_limit_retry_after_seconds = _retry_after_seconds(
+                                getattr(exc.response, "headers", None) if exc.response is not None else None)
                     error_detail = str(exc)
                 except (requests.RequestException, ValueError, KeyError, json.JSONDecodeError) as exc:
                     error = type(exc).__name__
@@ -485,7 +584,7 @@ class MigratedWorkloadRuntime:
                 # 增量就 503 终止整轮、不回退。结构化输出（require_json_object）下学生看到的只是
                 # 直播面板的过程文本，终稿由 completed 事件的 cards 整包渲染，半截 JSON 增量不会
                 # 进入终稿，因此允许换下一个 provider 重试；自由文本模式仍保持 fail-closed。
-                if visible_output and not require_json_object:
+                if visible_output and not require_json_object and not validate_terminal_json:
                     raise HTTPException(
                         status_code=503,
                         detail="provider stream interrupted after visible output: " + selection.name,
@@ -514,6 +613,15 @@ class MigratedWorkloadRuntime:
                 if not retryable or provider_try + 1 >= provider_attempts:
                     break
                 time.sleep(retry_backoff_seconds * (provider_try + 1))
+        # 终态：任一 provider 曾以 429 拒绝且已全部用尽 → 透传 429（带 Retry-After，若上游给了提示）；
+        # 其余情况维持 503。这样 stream_student_explanation 的 except 会把 status 原样写入 error 事件，
+        # 与既有"事件内携带真实状态码"的契约一致（同步 execute 路径由 run_lock/executor 各自返回真实状态码）。
+        if saw_rate_limit:
+            raise HTTPException(
+                status_code=429,
+                detail="provider rate limited (429): " + ",".join(failures),
+                headers={"Retry-After": str(rate_limit_retry_after_seconds)} if rate_limit_retry_after_seconds else None,
+            )
         raise HTTPException(status_code=503, detail="all configured providers failed: " + ",".join(failures))
 
     def _result_from_stream(
@@ -548,13 +656,17 @@ class MigratedWorkloadRuntime:
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": (
                 "你是高中数学讲解的受限 ReAct 规划器。只返回 JSON："
-                "{\"decision\":\"action|final\",\"tools\":[\"search_textbook|match_knowledge_graph|search_teacher_resources\"],"
+                "{\"decision\":\"action|final\",\"tools\":[\"search_textbook|match_knowledge_graph|search_teacher_resources|search_similar_figures\"],"
                 "\"queries\":[\"短检索词\"]}。"
                 "只有在确实需要已授权资料时才选 action；tools 只能来自 availableTools，queries 最多 6 个。"
                 "若题目自洽则返回 final，且 tools 与 queries 为空，并同时返回 "
                 "conversationTitle 和 cards。cards 使用与 compose 相同的字段，sourceUris 只能来自 evidence。"
                 "不要输出推理过程或 Markdown。题干已提供全部条件且可用代数、几何或定义直接完成时，"
                 "必须返回 final；不得仅为讲解通用概念而调用检索。"
+                # 2026-09-08 与 compose 提示词同口径：思考面板直传原始 reasoning，小模型拼装 JSON 的
+                # 英文过程会原样给学生看到，这里要求思考面向判断本身、想清后直接输出最终 JSON。
+                "思考时请用连贯完整的中文叙述判断思路；不要在思考中逐字拼装 JSON、复述字段名或输出"
+                "英文碎片，想清内容后直接给出最终 JSON。"
                 + MATH_MARKUP_OUTPUT_CONTRACT
             )},
             # base user：第 1 轮与后续轮次逐字节一致（不含 observations），是缓存命中的锚点。
@@ -584,7 +696,13 @@ class MigratedWorkloadRuntime:
         # BUG-C1：消息构造统一走 _react_planner_messages（追加式），删除此处与流式分支重复的重建式构造。
         messages = self._react_planner_messages(request, available_tools)
         content, result = self._call_json(request.runId, request.providerRoute, messages)
-        parsed = self._json_object(content)
+        try:
+            parsed = self._json_object(content)
+        except HTTPException:
+            # 2026-09-08 与流式路径同根因：flash 偶发非法 JSON。_call_json 只在 HTTP 层换 provider，
+            # 解析在其返回之后、从不重试；这里补一次重呼（网关端点会换通道/重新采样），再失败照常上抛。
+            content, result = self._call_json(request.runId, request.providerRoute, messages)
+            parsed = self._json_object(content)
         decision = str(parsed.get("decision") or "final").strip().lower()
         tools = parsed.get("tools") if isinstance(parsed.get("tools"), list) else []
         safe_tools = [str(tool) for tool in tools if str(tool) in available_tools][:3]
@@ -779,27 +897,46 @@ class MigratedWorkloadRuntime:
             results = list(pool.map(probe, selections))
         return {"status": "COMPLETED", "results": results}
 
-    def chat_messages(self, run_id: str, route: ProviderRoute, messages: list[dict[str, Any]]) -> str:
-        """单次非流式模型调用的公开入口，供上下文图生成五维会话摘要。
+    def chat_messages(
+            self, run_id: str, route: ProviderRoute, messages: list[dict[str, Any]],
+            timeout_seconds: float | None = None, max_tokens: int | None = None) -> str:
+        """单次非流式模型调用的公开入口，供上下文图生成五维会话摘要与动画分镜生成。
 
         必须复用 _call_json：provider 路由、重试与 UsageLedger 记账都在那里完成，摘要调用的
         token 用量与讲解调用同等入账，禁止任何绕过本方法的 untracked provider call。失败按
         HTTPException 抛出，由调用方决定降级策略（上下文图会回退到确定性抽取式摘要）。
+        timeout_seconds/max_tokens 为长产物调用（如 animated_lesson 的分镜 JSON 需分钟级
+        延迟与数千 token 输出）预留显式预算，缺省仍走全局 45s 配置。
         """
-        content, _result = self._call_json(run_id, route, messages)
-        return content
+        return self.chat_result(run_id, route, messages, timeout_seconds, max_tokens).content
 
-    def _call_json(self, run_id: str, route: ProviderRoute, messages: list[dict[str, Any]]) -> tuple[str, ProviderResult]:
+    def chat_result(
+            self, run_id: str, route: ProviderRoute, messages: list[dict[str, Any]],
+            timeout_seconds: float | None = None, max_tokens: int | None = None) -> ProviderResult:
+        """chat_messages 的审计版：返回 provider/model/token 用量，供上游上报 providerName/usage。
+
+        animated_lesson workload 必须把实际使用的 provider 上报给 Java（网关劣化换链后
+        审计要能看出这次跑在谁家），记账仍走 _call_json 内的同一 UsageLedger。
+        """
+        _content, result = self._call_json(run_id, route, messages, timeout_seconds, max_tokens)
+        return result
+
+    def _call_json(
+            self, run_id: str, route: ProviderRoute, messages: list[dict[str, Any]],
+            timeout_seconds: float | None = None, max_tokens: int | None = None) -> tuple[str, ProviderResult]:
         failures: list[str] = []
         for attempt, selection in enumerate([route.primary, *route.fallbacks], 1):
             try:
-                result = self._call_one(run_id, selection.name, selection.model, attempt, messages)
+                result = self._call_one(
+                    run_id, selection.name, selection.model, attempt, messages, timeout_seconds, max_tokens)
                 return result.content, result
             except HTTPException as exc:
                 failures.append(f"{selection.name}:{exc.status_code}")
         raise HTTPException(status_code=503, detail="all configured providers failed: " + ",".join(failures))
 
-    def _call_one(self, run_id: str, provider: str, model: str, attempt: int, messages: list[dict[str, Any]]) -> ProviderResult:
+    def _call_one(
+            self, run_id: str, provider: str, model: str, attempt: int, messages: list[dict[str, Any]],
+            timeout_seconds: float | None = None, max_tokens: int | None = None) -> ProviderResult:
         api_key, base_url = provider_profiles.credentials(provider)
         if not api_key:
             raise HTTPException(status_code=503, detail="provider API key is unavailable")
@@ -813,10 +950,13 @@ class MigratedWorkloadRuntime:
             # concept; the provider layer's Anthropic conversion simply ignores this field.
             "response_format": {"type": "json_object"},
         }
+        if max_tokens:
+            # 分镜 JSON 这类大产物必须显式给输出预算；不传时保持既有网关默认行为不变。
+            request_payload["max_tokens"] = int(max_tokens)
         try:
             data = provider_profiles.post_completion(
                 provider_profiles.profile(provider), self._session, api_key, base_url, request_payload,
-                float(os.getenv("MATH_AGENT_MIGRATED_RUNTIME_TIMEOUT_SECONDS", "45")),
+                timeout_seconds or float(os.getenv("MATH_AGENT_MIGRATED_RUNTIME_TIMEOUT_SECONDS", "45")),
             )
             content = str(data["choices"][0]["message"].get("content") or "")
             usage = data.get("usage") or {}
@@ -850,10 +990,16 @@ class MigratedWorkloadRuntime:
         start, end = content.find("{"), content.rfind("}")
         if start < 0 or end <= start:
             raise HTTPException(status_code=422, detail="model response is not a JSON object")
+        snippet = content[start:end + 1]
         try:
-            value = json.loads(content[start:end + 1])
-        except json.JSONDecodeError as exc:
-            raise HTTPException(status_code=422, detail="model response JSON is invalid") from exc
+            value = json.loads(snippet)
+        except json.JSONDecodeError:
+            # 2026-09-08 学生问答验收：flash 模型常把 LaTeX 反斜杠直接写进 JSON 字符串（\frac 的 \f
+            # 不是合法 JSON 转义），整轮 422 终止。兜底：把非法 \X 补成合法 \\X 后再解析一次。
+            try:
+                value = json.loads(_repair_json_escapes(snippet))
+            except json.JSONDecodeError as exc:
+                raise HTTPException(status_code=422, detail="model response JSON is invalid") from exc
         if not isinstance(value, dict):
             raise HTTPException(status_code=422, detail="model response is not a JSON object")
         return value

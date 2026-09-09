@@ -1184,6 +1184,18 @@ h1, h2, h3, h4, h5, h6 {
   border-color: var(--slate-lighter);
 }
 
+/* CLIP/教材证据卡页图缩略：图片检索结果需要肉眼核对页面，不能只见路径文本。 */
+.evidence-page-image {
+  display: block;
+  max-width: 180px;
+  max-height: 240px;
+  object-fit: contain;
+  border: 1px solid var(--slate-lightest);
+  border-radius: 8px;
+  background: var(--slate-lightest);
+  margin: 8px 0;
+}
+
 .evidence-header {
   display: flex;
   align-items: flex-start;

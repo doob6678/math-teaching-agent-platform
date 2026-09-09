@@ -91,6 +91,7 @@ import {
 } from "./components/panelShared";
 import { StudentDashboardPanel } from "./components/StudentDashboardPanel";
 import { TeachingConversationPanel, TeachingConversationThreadItem } from "./components/TeachingConversationPanel";
+import { AnimatedLessonPanel } from "./components/AnimatedLessonPanel";
 import { SyncCheckpointView, TeacherResourcePanel } from "./components/TeacherResourcePanel";
 import { PdfCanvasPreview } from "./components/PdfCanvasPreview";
 import { KnowledgeWorkspace } from "./knowledge/KnowledgeWorkspace";
@@ -120,6 +121,21 @@ const TASK_RECOVERY_POLL_DELAY_MS = 5_000;
 // Keep the completed response behind the character queue so its full card never replaces unread SSE text at once.
 const STUDENT_EXPLANATION_FINAL_CARD_DELAY_PER_CHARACTER_MS = 12;
 const STUDENT_EXPLANATION_FINAL_CARD_HANDOFF_BUFFER_MS = 80;
+
+// 修复原因（2026-09-03 GUI 验收 BUG-G4）：crypto.randomUUID 只在安全上下文（https/环回）存在，
+// 经 http://mathagent.local 访问时为 undefined，讲义提交与讲题链路会抛 TypeError 静默中断。
+// getRandomValues 在非安全上下文仍可用，用它兜底生成 RFC-4122 v4 形态的幂等请求 ID。
+function newClientUuid(): string {
+  const c = globalThis.crypto;
+  if (typeof c?.randomUUID === "function") return c.randomUUID();
+  const bytes = new Uint8Array(16);
+  if (c?.getRandomValues) c.getRandomValues(bytes);
+  else for (let i = 0; i < 16; i += 1) bytes[i] = Math.floor(Math.random() * 256);
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
 
 type MathSegment = {
   key: string;
@@ -246,7 +262,10 @@ export function App() {
   // 讲题对话模型切换（老板 2026-09-01 要求）："" 表示自动（后端默认路由），否则为 "provider::model"，
   // 随请求以 preferredProviderName/preferredModelCode 提交，后端仍按目录白名单校验后才进路由。
   const [teachingModel, setTeachingModel] = useState("");
-  const [teachingConversationId, setTeachingConversationId] = useState(() => readStoredTeachingConversation().conversationId);
+  // 2026-09-08 串会话修复（内置浏览器实测）：登录态过期后换账号直接登录不会走 handleLogout，
+  // 旧实现在 useState 初始化就恢复 localStorage 缓存，此时身份尚未校验，共享设备上新账号会
+  // 看到上一账号的讲题对话。初始值改为空，身份校验通过且分区核对后才在恢复 effect 里恢复。
+  const [teachingConversationId, setTeachingConversationId] = useState("");
   const [teachingConversationTitle, setTeachingConversationTitle] = useState("AI 讲题");
   const [teachingConversationSummaries, setTeachingConversationSummaries] = useState<StudentExplanationConversationSummary[]>([]);
   // 侧边栏会话分页：page 从 1 开始；整页返回视为可能还有更早会话，展示“加载更多”。
@@ -255,7 +274,9 @@ export function App() {
   const [hasMoreTeachingConversations, setHasMoreTeachingConversations] = useState(false);
   const [loadingMoreTeachingConversations, setLoadingMoreTeachingConversations] = useState(false);
   const [teachingConversationEntries, setTeachingConversationEntries] =
-    useState<TeachingConversationThreadItem[]>(() => readStoredTeachingConversation().entries);
+    useState<TeachingConversationThreadItem[]>([]);
+  // 记录当前身份已尝试过本地缓存恢复的会话分区，防止 authSession 引用变化触发重复恢复覆盖新输入。
+  const teachingConversationRestoredSession = useRef("");
   const [openingTeachingConversationId, setOpeningTeachingConversationId] = useState("");
   const [teachingConversationImageDraft, setTeachingConversationImageDraft] = useState<TeachingConversationImageDraft | null>(null);
   const [uploadingTeachingConversationImage, setUploadingTeachingConversationImage] = useState(false);
@@ -546,7 +567,7 @@ export function App() {
     const studentId = authSession?.role === "student"
       ? undefined
       : (studentDashboard?.studentId ?? (dashboardStudentId.trim() || undefined));
-    const clientRequestId = globalThis.crypto.randomUUID();
+    const clientRequestId = newClientUuid();
     setTeachingError("");
     api.submitTargetedLearningHandout({
       clientRequestId,
@@ -570,7 +591,7 @@ export function App() {
     setStudentDashboardError("");
     setTeachingError("");
     api.submitTargetedPractice({
-      clientRequestId: globalThis.crypto.randomUUID(),
+      clientRequestId: newClientUuid(),
       exerciseCount: 5,
       evidenceLimit: Math.max(1, Math.min(limit, 8)),
     })
@@ -695,14 +716,40 @@ export function App() {
   }, [api, hasVerifiedSession]);
 
   useEffect(() => {
+    // 修复原因（2026-09-03 BUG-G1 复测轮）：登出重置这两项 state 后本 effect 会把“空壳 JSON”写回，
+    // 覆盖 handleLogout 里的 removeItem，留下残留键。改为空态直接删键，保证登出后存储干净。
+    // 2026-09-08 串会话修复：身份未确定（authSession 为 null，如启动校验中/登出后）不碰存储，
+    // 否则启动时空 state 会误删待恢复缓存；存储现在带会话分区，恢复方核对后才写入有效。
+    if (!authSession) return;
+    if (!teachingConversationId && teachingConversationEntries.length === 0) {
+      globalThis.localStorage?.removeItem(TEACHING_CONVERSATION_STORAGE_KEY);
+      return;
+    }
     globalThis.localStorage?.setItem(
       TEACHING_CONVERSATION_STORAGE_KEY,
       JSON.stringify({
+        session: teachingConversationPartition(authSession),
         conversationId: teachingConversationId,
         entries: sanitizeTeachingConversationEntries(teachingConversationEntries),
       }),
     );
-  }, [teachingConversationEntries, teachingConversationId]);
+  }, [teachingConversationEntries, teachingConversationId, authSession]);
+
+  useEffect(() => {
+    // 2026-09-08 串会话修复：身份校验通过后，按会话分区恢复本地缓存；分区缺失或不一致
+    // （旧格式缓存、上一账号残留）一律删键并保持空态——服务端历史仍可在侧栏回看，跨账号不可见。
+    if (!hasVerifiedSession || !authSession) return;
+    const partition = teachingConversationPartition(authSession);
+    if (teachingConversationRestoredSession.current === partition) return;
+    teachingConversationRestoredSession.current = partition;
+    const stored = readStoredTeachingConversation();
+    if (stored.session !== partition) {
+      globalThis.localStorage?.removeItem(TEACHING_CONVERSATION_STORAGE_KEY);
+      return;
+    }
+    setTeachingConversationId(stored.conversationId);
+    setTeachingConversationEntries(stored.entries);
+  }, [authSession, hasVerifiedSession]);
 
   useEffect(() => {
     // Remove obsolete payload caches once. The replacement stores only an opaque task ID and reloads its state through
@@ -965,7 +1012,7 @@ export function App() {
   function handleTeachingTask(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!learningGoal.trim()) { setTeachingError("请输入讲义主题或学习目标。"); return; }
-    const clientRequestId = globalThis.crypto.randomUUID();
+    const clientRequestId = newClientUuid();
     const submittedGoal = learningGoal.trim();
     const submittedQuestion = teachingQuestion.trim();
     const submittedSupplement = teachingSupplement.trim();
@@ -1074,7 +1121,7 @@ export function App() {
 
   /** Starts an isolated durable conversation before its first model call, preventing rapid first messages from splitting. */
   function startNewTeachingConversation() {
-    setTeachingConversationId(globalThis.crypto.randomUUID());
+    setTeachingConversationId(newClientUuid());
     setTeachingConversationTitle("新对话");
     setTeachingConversationEntries([]);
     setTeachingConversationInput("");
@@ -1113,19 +1160,21 @@ export function App() {
       setTeachingError("请输入题目，或先上传题图。");
       return;
     }
-    const requestId = globalThis.crypto.randomUUID();
+    const requestId = newClientUuid();
     // Allocate before awaiting the server so every turn from this browser state has one stable conversation id.
-    const activeConversationId = teachingConversationId || globalThis.crypto.randomUUID();
+    const activeConversationId = teachingConversationId || newClientUuid();
     const pendingAssistantId = `assistant-pending:${requestId}`;
     // The completed event is authoritative even if the SSE transport needs extra time to close cleanly.
     let completedResponseReceived = false;
     let streamedCharacterCount = 0;
-    // 首 token 计时用单调时钟：老板 2026-09-01 反馈"首字 61s 有问题，统计应该从思考开始"——
-    // 提交到思考开始之间是 react 决策轮+向量检索等系统开销，混进"首字"会高估模型延迟。
-    // 新口径：firstTokenMs = 首个讲解增量 − 首个思考增量（compose 思考开始）；无思考的模型回退到提交时刻。
-    // totalMs 仍是整个流式回合的耗时，两者都展示在回答卡上并输出到控制台，便于持续压响应速度。
+    // 首 token 计时用单调时钟。口径演进：2026-09-01 曾把首字定义为"思考开始→首个正文"；
+    // 2026-09-06 老板拍板改为 thinking 也算首字并流式展示——firstTokenMs = 提交→首个可见字符
+    // （思考增量或正文增量，先到算谁），与用户在屏幕上看到第一个字的主观等待一致。
+    // 旧口径两个数（thinking-first / answer-first）继续输出到控制台 telemetry，便于对比优化。
+    // totalMs 仍是整个流式回合的耗时，两者都展示在回答卡上，便于持续压响应速度。
     const submitMonotonicMs = performance.now();
     let thinkingStartMonotonicMs: number | null = null;
+    let answerStartMonotonicMs: number | null = null;
     let firstTokenMs: number | null = null;
     setSubmittingTeachingConversation(true);
     setTeachingError("");
@@ -1183,14 +1232,24 @@ export function App() {
           completedResponseReceived = true;
           setSubmittingTeachingConversation(false);
         }
-        // 思考开始锚点：决策轮的推理不会下发到本流，首个 aiReasoningDelta 即讲解 compose 的思考开始。
+        // 思考开始锚点：带图轮的决策思考与 compose 的思考共用同一 reasoning 通道，首个增量即思考首字。
         if (thinkingStartMonotonicMs === null && (payload.aiReasoningDelta || "").length > 0) {
           thinkingStartMonotonicMs = performance.now();
+          globalThis.console?.info?.(
+            `[telemetry] thinking-first ${Math.round(thinkingStartMonotonicMs - submitMonotonicMs)}ms conversation=${activeConversationId}`,
+          );
         }
-        // 首内容兜底：部分模型通道不吐增量，首个内容是 completed 事件里的完整结果。
-        // 无论哪种形态，都把“第一个讲解字到达 − 思考开始”如实记为 TTFT，不虚构流式速度。
-        if (firstTokenMs === null && ((payload.aiContentDelta || "").length > 0 || !!payload.response)) {
-          firstTokenMs = Math.round(performance.now() - (thinkingStartMonotonicMs ?? submitMonotonicMs));
+        // 正文首字锚点：部分模型通道不吐增量，首个正文是 completed 事件里的完整结果。
+        if (answerStartMonotonicMs === null && ((payload.aiContentDelta || "").length > 0 || !!payload.response)) {
+          answerStartMonotonicMs = performance.now();
+          globalThis.console?.info?.(
+            `[telemetry] answer-first ${Math.round(answerStartMonotonicMs - submitMonotonicMs)}ms conversation=${activeConversationId}`,
+          );
+        }
+        // 新口径首字：提交→首个可见字符（思考或正文先到算谁），与用户主观等待一致。
+        if (firstTokenMs === null && ((payload.aiReasoningDelta || "").length > 0
+            || (payload.aiContentDelta || "").length > 0 || !!payload.response)) {
+          firstTokenMs = Math.round(performance.now() - submitMonotonicMs);
           // 控制台输出结构化速度日志，配合回答卡上的“首字”徽标，方便持续优化首 token 响应。
           globalThis.console?.info?.(`[telemetry] first-token ${firstTokenMs}ms conversation=${activeConversationId}`);
         }
@@ -2416,6 +2475,13 @@ function handleUseFeishuCandidate(candidate: TeacherFeishuDiscoveryCandidate) {
       setMcpConfiguration(null);
       setMcpLatestCreatedKey(null);
       setDropdownOpen(false);
+      // 修复原因（2026-09-03 GUI 验收 BUG-G1）：讲题会话线程缓存此前只在写入 effect 里维护，
+      // 登出不清理，下一个登录者会恢复上一个身份的对话内容（跨身份残留）。
+      // 必须先重置 state 再删 key：写入 effect（见 TEACHING_CONVERSATION_STORAGE_KEY 的 setItem）
+      // 依赖这两项 state，重置为空数组/空串后即使 effect 再跑也只写回空值，不会复活旧会话。
+      setTeachingConversationId("");
+      setTeachingConversationEntries([]);
+      globalThis.localStorage?.removeItem(TEACHING_CONVERSATION_STORAGE_KEY);
     });
   }
 
@@ -2841,7 +2907,10 @@ function handleUseFeishuCandidate(candidate: TeacherFeishuDiscoveryCandidate) {
 
   function renderTeaching() {
     return renderRequiresAuth(
-      <TeachingConversationPanel
+      <>
+        {/* 动画讲题是视口外浮层，不挤占对话壳的 100dvh 布局。 */}
+        <AnimatedLessonPanel api={api} />
+        <TeachingConversationPanel
         conversationTitle={teachingConversationTitle}
         value={teachingConversationInput}
         entries={teachingConversationEntries}
@@ -2865,7 +2934,8 @@ function handleUseFeishuCandidate(candidate: TeacherFeishuDiscoveryCandidate) {
         onStartNewConversation={startNewTeachingConversation}
         onOpenConversation={openTeachingConversation}
         onLoadMoreConversations={loadMoreTeachingConversations}
-      />,
+        />
+      </>,
     );
   }
 
@@ -3480,25 +3550,34 @@ function savedMultiAgentWritingRequest(workflowId: string): MultiAgentWritingReq
   }
 }
 
+// 会话分区与讲义任务恢复（handoutTaskRecovery.sessionPartition）保持同一口径：
+// role:tenantId:userId，保证同一浏览器多账号切换时缓存不会跨身份恢复。
+function teachingConversationPartition(session: LoginResponse) {
+  return `${session.role}:${session.tenantId}:${session.userId}`;
+}
+
 function readStoredTeachingConversation(): {
+  session: string;
   conversationId: string;
   entries: TeachingConversationThreadItem[];
 } {
   try {
     const value = globalThis.localStorage?.getItem(TEACHING_CONVERSATION_STORAGE_KEY);
     if (!value) {
-      return { conversationId: "", entries: [] };
+      return { session: "", conversationId: "", entries: [] };
     }
     const parsed = JSON.parse(value) as {
+      session?: string;
       conversationId?: string;
       entries?: TeachingConversationThreadItem[];
     };
     return {
+      session: typeof parsed.session === "string" ? parsed.session : "",
       conversationId: parsed.conversationId ?? "",
       entries: Array.isArray(parsed.entries) ? sanitizeTeachingConversationEntries(parsed.entries) : [],
     };
   } catch {
-    return { conversationId: "", entries: [] };
+    return { session: "", conversationId: "", entries: [] };
   }
 }
 

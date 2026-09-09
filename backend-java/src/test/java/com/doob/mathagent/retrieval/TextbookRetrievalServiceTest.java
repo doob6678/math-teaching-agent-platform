@@ -153,6 +153,80 @@ class TextbookRetrievalServiceTest {
     }
 
     @Test
+    void similarFiguresReturnBlockWithNeighboringPageTextAndRespectCap() throws Exception {
+        // 相似题图：Milvus 图搜命中 book_a p93 后，用内存语料补齐命中块与左右相邻页正文，并把 k 封顶到 5。
+        Path root = tempDir.resolve("processed_books-similar-figures");
+        Path bookRoot = root.resolve("book_a");
+        Files.createDirectories(bookRoot.resolve("jsonl"));
+        Files.writeString(root.resolve("catalog.jsonl"), """
+                {"doc_id":"book_a","book_name":"教材A","volume":"必修一","book_root":"%s","manifest":"%s","chunk_count":3,"page_count":3,"ai_ok":false}
+                """.formatted(escape(bookRoot), escape(bookRoot.resolve("manifest.json"))));
+        Files.writeString(bookRoot.resolve("jsonl/chunks.jsonl"), """
+                {"chunk_id":"book_a_p092_a","doc_id":"book_a","book_name":"教材A","chapter_path":["第二章"],"page_no":92,"section_title":"t","text":"左邻页正文ABC","formula_text":"","image_rel_paths":[],"source_page_image":"pages/p092.png"}
+                {"chunk_id":"book_a_p093_a","doc_id":"book_a","book_name":"教材A","chapter_path":["第二章"],"page_no":93,"section_title":"相似例题","text":"命中页正文XYZ光路","formula_text":"","image_rel_paths":[],"source_page_image":"pages/p093.png"}
+                {"chunk_id":"book_a_p094_a","doc_id":"book_a","book_name":"教材A","chapter_path":["第二章"],"page_no":94,"section_title":"t","text":"右邻页正文DEF","formula_text":"","image_rel_paths":[],"source_page_image":"pages/p094.png"}
+                """);
+        // 手写 fake（仓库不用 Mockito）：CLIP 图搜固定返回 p93 命中 + 5 条溢出，覆盖封顶与邻接补齐。
+        TextbookPageImageSearchService clipStub = new TextbookPageImageSearchService(
+                null, null, new com.doob.mathagent.resources.TextbookPageImageService(new TextbookCatalogReader())) {
+            @Override
+            public TextbookPageImageSearchResponse search(TextbookPageImageSearchRequest request) {
+                List<TextbookPageImageSearchHit> hits = new ArrayList<>();
+                hits.add(new TextbookPageImageSearchHit(0.99, "book_a", "教材A", "第二章", 93, "86",
+                        "相似例题", "", "/api/resources/textbooks/book_a/pages/93/image"));
+                for (int offset = 0; offset < 5; offset++) {
+                    int page = 100 + offset;
+                    hits.add(new TextbookPageImageSearchHit(0.5 - offset * 0.01, "book_a", "教材A", "第二章", page, "",
+                            "", "", "/api/resources/textbooks/book_a/pages/" + page + "/image"));
+                }
+                return new TextbookPageImageSearchResponse("q", 5, "milvus", "local_clip", hits.size(), hits);
+            }
+        };
+        TextbookRetrievalService service = new TextbookRetrievalService(
+                new TextbookCatalogReader(),
+                new TextbookChunkReader(),
+                new LocalTextbookBm25SearchEngine(),
+                new NoopRetrievalAuditSink(),
+                new DisabledTextbookSearchCache(),
+                new RedisTextbookSearchCacheProperties(false, "math-agent:test:disabled", Duration.ofMinutes(10), Duration.ofMinutes(1)),
+                TeacherResourceGraphAlignmentService.disabled(),
+                new com.doob.mathagent.resources.TextbookPageImageService(new TextbookCatalogReader()),
+                clipStub,
+                new GroupedSectionPageTextSearchService(),
+                com.doob.mathagent.vector.service.TestVectorIndexService.successful(
+                        new com.doob.mathagent.teacher.service.InMemoryTeacherResourceStore(),
+                        new com.doob.mathagent.teacher.service.InMemoryTeacherDocumentBlockStore()),
+                TextbookRetrievalProperties.defaults());
+
+        List<TextbookRetrievalService.SimilarFigureHit> figures =
+                service.searchSimilarFigures(root, "data:image/png;base64,AAAA", 5);
+
+        assertThat(figures).hasSize(5);
+        TextbookRetrievalService.SimilarFigureHit top = figures.get(0);
+        assertThat(top.docId()).isEqualTo("book_a");
+        assertThat(top.pageNo()).isEqualTo(93);
+        assertThat(top.score()).isEqualTo(0.99);
+        assertThat(top.blockText()).contains("命中页正文XYZ光路");
+        assertThat(top.prevBlockText()).contains("左邻页正文ABC");
+        assertThat(top.nextBlockText()).contains("右邻页正文DEF");
+        // 图片只回后端受控 URL，绝不外泄 processed_books 文件系统路径。
+        assertThat(top.imageUri()).isEqualTo("/api/resources/textbooks/book_a/pages/93/image");
+    }
+
+    @Test
+    void similarFiguresEmptyWithoutImageAndFailFastWithoutClip() {
+        // 工具边界：无题图直接空返回（不检索）；有题图但 CLIP 图搜未装配时快速失败，绝不静默假装命中。
+        TextbookRetrievalService service = com.doob.mathagent.retrieval.TextbookRetrievalServiceFixture.service(
+                new TextbookCatalogReader(), new TextbookChunkReader(),
+                new LocalTextbookBm25SearchEngine(), new NoopRetrievalAuditSink());
+        Path root = tempDir.resolve("processed-books-figures-guard");
+        assertThat(service.searchSimilarFigures(root, "  ", 5)).isEmpty();
+        assertThatThrownBy(() -> service.searchSimilarFigures(root, "data:image/png;base64,AAAA", 5))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("CLIP");
+    }
+
+    @Test
     void keepsTheActuallyRecalledCrossPageChildAsTheReturnedEvidencePage() throws Exception {
         Path root = tempDir.resolve("processed_books-cross-page-child");
         Path bookRoot = root.resolve("book_a");

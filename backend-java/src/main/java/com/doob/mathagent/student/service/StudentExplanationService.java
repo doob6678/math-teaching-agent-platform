@@ -1,5 +1,6 @@
 package com.doob.mathagent.student.service;
 
+import com.doob.mathagent.infrastructure.ai.AiProviderCatalog;
 import com.doob.mathagent.infrastructure.security.RequestSubject;
 import com.doob.mathagent.knowledge.service.KnowledgeGraphSpineService;
 import com.doob.mathagent.knowledge.vo.KnowledgeGraphSpineResponse;
@@ -17,6 +18,7 @@ import com.doob.mathagent.teacher.document.TeacherResourceStore;
 import com.doob.mathagent.teacher.search.TeacherResourceBlockSearchResponse;
 import com.doob.mathagent.teacher.document.TeacherResourceDocumentResponse;
 import com.doob.mathagent.vector.service.VectorIndexService;
+import com.doob.mathagent.agent.service.AiChatStreamDelta;
 import com.doob.mathagent.agent.service.PythonMigratedWorkloadClient;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -57,6 +59,8 @@ public class StudentExplanationService {
     private static final String ENDPOINT = "/api/students/explanations";
     /** The curated graph is a compact concept hint, not a long evidence list. */
     private static final int MAX_KNOWLEDGE_GRAPH_MATCHES = 5;
+    /** 相似题图检索每次最多返回的命中数（老板 2026-09-06：k≤5）。 */
+    private static final int MAX_SIMILAR_FIGURES = 5;
     /** A short follow-up window is cheaper and clearer when it fits without model-side preparation. */
     private static final int RAW_RECENT_CONTEXT_MAX_RECORDS = 4;
     /** Conservative character estimate; CJK-heavy conversation text consumes more tokens than ASCII prose. */
@@ -242,6 +246,14 @@ public class StudentExplanationService {
                     preparedImage.estimatedImageTokens());
         }
         String imageDataUrl = preparedImage.dataUrl();
+        // 带图 + 显式非视觉模型必须在任何模型调用（含默认路由的 ReAct 决策轮）之前拒绝：
+        // providerRoute 的权威校验要到 compose 才抛错，会让决策轮白跑一次并产生计费 tokens（2026-09-06 场景 C 实测）。
+        // 这里用静态 supportsVision 做入口早筛，措辞与 providerRoute 保持一致；细粒度提供商白名单仍由 providerRoute 兜底。
+        if (!imageDataUrl.isBlank() && !text(normalizedRequest.preferredModelCode()).isBlank()
+                && !AiProviderCatalog.supportsVision(normalizedRequest.preferredModelCode())) {
+            throw new IllegalArgumentException("所选模型 " + text(normalizedRequest.preferredProviderName())
+                    + "/" + normalizedRequest.preferredModelCode().strip() + " 不支持图片输入，请切换到视觉模型或移除题图");
+        }
         String query = text(normalizedRequest.questionText());
         if (query.isBlank() && imageRecord != null) {
             query = "请识别上传图片中的数学内容，并生成适合资料检索的具体关键词";
@@ -389,10 +401,15 @@ public class StudentExplanationService {
         emitProgress(listener, request, visibleQuestion, stages, cards, sources, imageRecord,
                 imageUnderstanding, aiDraft, conversationTitle, startedNanos,
                 "AI正在判断这道题是否需要检索资料。" + (available.isEmpty() ? "当前没有可用检索工具。" : "可用工具：" + String.join("、", available)));
+        // 方案二（老板 2026-09-06 拍板）：finalDraft 决策轮的 title/summary 正文增量经投影层直接流式给学生，
+        // 带图轮首字从整包完成降到首个字段到达。但显式模型偏好时决策草稿会在下方被丢弃并强制 compose
+        // （绑定校验），默认 fast 模型的草稿不得先行可见——那时剥离 content 槽位，仅保留思考流式。
+        final boolean decisionDraftAuthoritative = text(request.preferredProviderName()).isBlank()
+                && text(request.preferredModelCode()).isBlank();
         final boolean[] decisionTokenSeen = {false};
         StudentExplanationAiStreamListener decisionStream = (delta, ignoredCards) -> {
             listener.throwIfCancelled();
-            listener.onAiDelta(delta, List.of());
+            listener.onAiDelta(projectDecisionDelta(delta, decisionDraftAuthoritative), List.of());
             if (!decisionTokenSeen[0] && delta != null && !text(delta.contentDelta()).isBlank()) {
                 decisionTokenSeen[0] = true;
                 emitProgress(listener, request, visibleQuestion, stages, cards, sources, imageRecord,
@@ -421,7 +438,16 @@ public class StudentExplanationService {
         emitProgress(listener, request, visibleQuestion, stages, cards, sources, imageRecord,
                 imageUnderstanding, aiDraft, conversationTitle, startedNanos, decisionDetail);
         if (decision.isFinal()) {
-            return new ReactEvidence(List.of(), List.of(), decision.finalDraft());
+            // 显式模型偏好 == 绑定（2026-09-06 图片路由教训）：决策轮按老板 2026-09-01 的性能决定走默认
+            // fast_text 路由，若把默认模型产出的 finalDraft 直接当可见答案，用户选的模型（尤其带图时
+            // 指定的视觉模型）就从未执行过，DB 审计会记成非绑定模型。此时丢弃草稿，走下方 null-finalDraft
+            // 分支强制 compose 调用（generate() 会把 preferred* 传入 providerRoute）。自动轮无偏好，保持省一次调用的捷径。
+            boolean explicitPreference = !text(request.preferredProviderName()).isBlank()
+                    || !text(request.preferredModelCode()).isBlank();
+            if (!explicitPreference) {
+                return new ReactEvidence(List.of(), List.of(), decision.finalDraft());
+            }
+            return new ReactEvidence(List.of(), List.of(), null);
         }
         List<String> retrievalQueries = decision.searchQueries().stream()
                 .map(queryValue -> text(queryValue).strip())
@@ -469,6 +495,21 @@ public class StudentExplanationService {
                         imageUnderstanding, aiDraft, conversationTitle, startedNanos,
                         "教师资料已找到 " + teacherHits.size() + " 条，正在交给 AI。");
                 observations.add("教师资料检索命中 " + teacherHits.size() + " 条证据。");
+            } else if ("search_similar_figures".equals(tool)) {
+                upsertStage(stages, runningToolStage(
+                        "search_similar_figures", "检索相似题图", "本轮上传题图", MAX_SIMILAR_FIGURES));
+                emitProgress(listener, request, visibleQuestion, stages, cards, sources, imageRecord,
+                        imageUnderstanding, aiDraft, conversationTitle, startedNanos,
+                        "正在以本轮题图检索教材中的相似题图，并补齐命中块与左右相邻正文。");
+                List<TextbookRetrievalService.SimilarFigureHit> figures =
+                        searchSimilarFigures(request, subject, imageDataUrl, stages);
+                figures.stream().map(StudentExplanationService::similarFigureSource).forEach(sources::add);
+                if (!figures.isEmpty()) {
+                    observations.add("相似题图检索命中 " + figures.size() + " 条证据。");
+                }
+                emitProgress(listener, request, visibleQuestion, stages, cards, sources, imageRecord,
+                        imageUnderstanding, aiDraft, conversationTitle, startedNanos,
+                        "相似题图已找到 " + figures.size() + " 条，正在交给 AI。");
             }
         }
         return new ReactEvidence(List.copyOf(knowledgeNodes), List.copyOf(teacherHits), null);
@@ -545,6 +586,73 @@ public class StudentExplanationService {
         return ranked;
     }
 
+    /**
+     * 相似题图检索工具边界：仅以本轮已授权题图为查询，委托 TextbookRetrievalService 走 CLIP→Milvus 图像集合召回，
+     * Java 负责鉴权、阶段状态与受控图片引用，命中块与左右相邻正文随证据返回给 AI 自行阅读。
+     */
+    private List<TextbookRetrievalService.SimilarFigureHit> searchSimilarFigures(
+            StudentExplanationRequest request, RequestSubject subject, String imageDataUrl,
+            List<StudentExplanationResponse.WorkflowStage> stages) {
+        long stageStarted = System.nanoTime();
+        if (text(imageDataUrl).isBlank()) {
+            upsertStage(stages, stageFrom(stageStarted, "search_similar_figures", "检索相似题图", "skipped",
+                    "本轮没有可授权的题图，已跳过相似题图检索。"));
+            return List.of();
+        }
+        try {
+            List<TextbookRetrievalService.SimilarFigureHit> hits = textbookRetrievalService.searchSimilarFigures(
+                    textbookResourceProperties.processedBooksRoot(), imageDataUrl, MAX_SIMILAR_FIGURES);
+            upsertStage(stages, stageFrom(stageStarted, "search_similar_figures", "检索相似题图", "completed",
+                    "调用参数：以本轮题图检索，最多 " + MAX_SIMILAR_FIGURES + " 条；命中 " + hits.size()
+                            + " 条教材相似题图（含命中块与左右相邻正文）。"));
+            return hits;
+        } catch (RuntimeException exception) {
+            log.warn("student_explanation_similar_figures_failed tenantId={} subjectType={} subjectId={}",
+                    subject.tenantId(), subject.subjectType(), subject.subjectId(), exception);
+            upsertStage(stages, stageFrom(stageStarted, "search_similar_figures", "检索相似题图", "degraded",
+                    "相似题图暂时未取到，先按已授权资料继续讲。" + compact(exception.getMessage())));
+            return List.of();
+        }
+    }
+
+    /** 相似题图证据条目：沿用 textbook 类型与受控图片 URL，前端授权阅览，不新增展示协议。 */
+    private static StudentExplanationResponse.ExplanationSource similarFigureSource(
+            TextbookRetrievalService.SimilarFigureHit hit) {
+        return new StudentExplanationResponse.ExplanationSource(
+                "textbook",
+                text(hit.bookName()) + " 第 " + hit.pageNo() + " 页 相似题图",
+                "textbook://" + text(hit.docId()) + "/page/" + hit.pageNo(),
+                "PUBLIC_TEXTBOOK",
+                similarFigureSnippet(hit),
+                hit.score(),
+                text(hit.chapterPath()),
+                text(hit.imageUri()));
+    }
+
+    /** 把命中块与左右相邻正文压成一条可读证据交给 compose 模型“自己读”，只搬原文，不含任何教学结论。 */
+    private static String similarFigureSnippet(TextbookRetrievalService.SimilarFigureHit hit) {
+        String block = text(hit.blockText()).isBlank() ? text(hit.sectionTitle()) : text(hit.blockText());
+        StringBuilder snippet = new StringBuilder();
+        snippet.append("相似题图：").append(text(hit.bookName())).append(" 第").append(hit.pageNo()).append("页");
+        if (!text(hit.chapterPath()).isBlank()) {
+            snippet.append("（").append(text(hit.chapterPath())).append("）");
+        }
+        snippet.append("，相似度").append(String.format(Locale.ROOT, "%.2f", hit.score())).append("。");
+        snippet.append("【命中块正文】").append(flatClip(block, 300));
+        if (!text(hit.prevBlockText()).isBlank()) {
+            snippet.append("【左邻块】").append(flatClip(hit.prevBlockText(), 200));
+        }
+        if (!text(hit.nextBlockText()).isBlank()) {
+            snippet.append("【右邻块】").append(flatClip(hit.nextBlockText(), 200));
+        }
+        return snippet.toString();
+    }
+
+    private static String flatClip(String value, int limit) {
+        String flat = text(value).replaceAll("\\s+", " ").strip();
+        return flat.length() <= limit ? flat : flat.substring(0, limit).strip() + "…";
+    }
+
     /** Builds the model-visible tool allow-list from backend policy, never from client-supplied tool names. */
     private static Set<String> availableReactTools(StudentExplanationRequest request, RequestSubject subject) {
         Set<String> tools = new LinkedHashSet<>();
@@ -554,6 +662,9 @@ public class StudentExplanationService {
         // TENANT_PUBLIC/PUBLIC_TEXTBOOK material, but never receive a private document simply because a UI flag says
         // "teacher resources".  Keeping the tool available lets the model actively retrieve public follow-up facts.
         if (Boolean.TRUE.equals(request.searchTeacherResources())) tools.add("search_teacher_resources");
+        // 相似题图只在本轮携带已授权题图时对模型开放：以图搜图依赖题图字节，无图则该工具无意义，
+        // 且 availableTools 上限由 Java 决定（Python 仅按名授权执行），符合检索链路边界。
+        if (!text(request.imageUploadId()).isBlank()) tools.add("search_similar_figures");
         return tools;
     }
 
@@ -1497,6 +1608,21 @@ public class StudentExplanationService {
 
     private static String text(String value) {
         return value == null ? "" : value;
+    }
+
+    /**
+     * 决策轮流式增量的可见性投影（package-private 供单测覆盖）。
+     *
+     * <p>finalDraft 正文流式的前提是草稿即终稿（无显式模型偏好）。当用户绑定了偏好模型时草稿会被丢弃、
+     * 强制 compose 重生成，此时必须剥离 content 增量，避免默认 fast 模型的草稿文字先流给学生再被终稿整体替换；
+     * 思考增量与 token 计数不受该开关影响。</p>
+     */
+    static AiChatStreamDelta projectDecisionDelta(AiChatStreamDelta delta, boolean draftAuthoritative) {
+        if (delta == null || draftAuthoritative || text(delta.contentDelta()).isBlank()) {
+            return delta;
+        }
+        return new AiChatStreamDelta(delta.providerName(), delta.modelCode(), delta.reasoningDelta(), "",
+                delta.promptTokens(), delta.completionTokens(), delta.totalTokens());
     }
 
     /**

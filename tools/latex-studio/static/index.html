@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LaTeX Studio — 讲义实时预览</title>
+<link rel="stylesheet" href="/static/vendor/codemirror.css">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark">∑</span>
+    <span class="brand-name">LaTeX Studio</span>
+  </div>
+
+  <div class="file-box">
+    <select id="recent-files" class="recent-select" title="最近打开的文件">
+      <option value="">最近文件</option>
+    </select>
+    <input id="file-path" type="text" spellcheck="false" placeholder="输入 .tex 绝对路径或仓库相对路径，回车打开">
+    <button id="btn-open" class="btn btn-primary">打开</button>
+  </div>
+
+  <div class="status-area">
+    <span id="status-badge" class="badge badge-idle">未编译</span>
+    <span id="stat-info" class="stat-info"></span>
+    <span id="warn-info" class="warn-info" title=""></span>
+  </div>
+
+  <div class="actions">
+    <label class="auto-toggle" title="编辑或外部修改后自动保存并编译">
+      <input id="auto-compile" type="checkbox" checked>
+      自动编译
+    </label>
+    <button id="btn-compile" class="btn">重新编译</button>
+  </div>
+</header>
+
+<div id="external-hint" class="external-hint hidden">
+  文件已被外部修改（例如 AI 正在写入）。
+  <button id="btn-load-external" class="btn btn-small">加载新版本</button>
+  <button id="btn-dismiss-external" class="btn btn-small btn-ghost">忽略</button>
+</div>
+
+<main class="workspace">
+  <section id="editor-pane" class="editor-pane">
+    <textarea id="editor"></textarea>
+  </section>
+
+  <div id="divider" class="divider" title="拖拽调整宽度"></div>
+
+  <section id="preview-pane" class="preview-pane">
+    <div class="preview-toolbar">
+      <span id="page-info" class="page-info"></span>
+      <div class="zoom-group">
+        <button class="btn btn-small" data-zoom="fit">适应宽度</button>
+        <button class="btn btn-small" data-zoom="1.0">100%</button>
+        <button class="btn btn-small" data-zoom="1.25">125%</button>
+        <button class="btn btn-small" data-zoom="1.5">150%</button>
+      </div>
+    </div>
+    <div id="error-bar" class="error-bar hidden">
+      <span class="error-bar-title">编译错误</span>
+      <div id="error-list" class="error-list"></div>
+    </div>
+    <div id="pdf-container" class="pdf-container">
+      <div id="pdf-placeholder" class="pdf-placeholder">打开一个 .tex 文件开始预览</div>
+    </div>
+  </section>
+</main>
+
+<script src="/static/vendor/codemirror.js"></script>
+<script src="/static/vendor/stex.js"></script>
+<script src="/static/vendor/matchbrackets.js"></script>
+<script src="/static/vendor/closebrackets.js"></script>
+<script type="module" src="/static/app.js"></script>
+</body>
+</html>

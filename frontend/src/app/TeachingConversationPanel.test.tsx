@@ -1,6 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import {
+  reasoningTailText,
   repairMojibakeText,
   safeUserFacingText,
   stageDetailText,
@@ -88,6 +89,28 @@ describe("TeachingConversationPanel", () => {
     expect(repairMojibakeText("ä¸­ç­‰æ•°å­¦")).toBe("中等数学");
     expect(repairMojibakeText("中等数学")).toBe("中等数学");
     expect(repairMojibakeText("plain english")).toBe("plain english");
+  });
+
+  it("truncates the thinking tail at code point boundaries, never inside a surrogate pair", () => {
+    // 2026-09-08 思考乱码修复：旧实现 slice(-60) 按 UTF-16 码元切，会在 emoji 代理对中间留孤立代理项。
+    expect(reasoningTailText("短思考")).toBe("短思考");
+    const plain = "分".repeat(80);
+    expect(reasoningTailText(plain)).toBe(`…${"分".repeat(60)}`);
+    // 构造：第 60 个码点前恰好半枚代理对——U+1D7CE 是 astral 数字，占 2 个码元。
+    const withPair = "a".repeat(30) + "\uD835\uDCCE".repeat(30) + "\uD835\uDCDF";
+    const tail = reasoningTailText(withPair);
+    expect(tail.startsWith("…")).toBe(true);
+    // 无孤立代理项：把结果逐码元扫描，任何高代理项后面必须紧跟低代理项。
+    for (let i = 0; i < tail.length; i++) {
+      const code = tail.charCodeAt(i);
+      if (code >= 0xd800 && code <= 0xdbff) {
+        const next = tail.charCodeAt(i + 1);
+        expect(next >= 0xdc00 && next <= 0xdfff).toBe(true);
+        i++;
+      } else {
+        expect(code >= 0xdc00 && code <= 0xdfff).toBe(false);
+      }
+    }
   });
 
   it("renders paired decoration glyphs as emphasis and drops stray ones", () => {

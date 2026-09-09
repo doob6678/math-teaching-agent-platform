@@ -4,12 +4,17 @@ import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.core.env.Environment;
+import org.springframework.scheduling.TaskScheduler;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.event.TransactionPhase;
+import org.springframework.transaction.event.TransactionalEventListener;
 
 /** Dispatches durable task events and repairs only bounded, version-specific recovery gaps. */
 @Component
@@ -30,19 +35,28 @@ public class AgentWorkerTaskOutboxScheduler {
     private final long backlogWarnSeconds;
     private final Duration backlogWarnCooldown;
     private Instant lastBacklogWarnAt = Instant.EPOCH;
+    private final TaskScheduler taskScheduler;
+    // Coalesces wake events: while one immediate round is already queued, further enqueues are covered by it.
+    private final AtomicBoolean wakeQueued = new AtomicBoolean();
 
     public AgentWorkerTaskOutboxScheduler(
             AgentWorkerTaskDispatchService dispatchService,
             AgentWorkerTaskOutboxStore outboxStore,
             AgentWorkerTaskPublisher taskPublisher,
             Environment environment,
-            MeterRegistry meterRegistry) {
+            MeterRegistry meterRegistry,
+            TaskScheduler taskScheduler) {
         this.dispatchService = dispatchService;
         this.outboxStore = outboxStore;
+        this.taskScheduler = taskScheduler;
         this.backlogWarnSeconds = Math.max(1L, environment.getProperty("math-agent.agent-worker.outbox.backlog-warn-seconds", Long.class, 120L));
         this.backlogWarnCooldown = Duration.ofSeconds(Math.max(5L,
                 environment.getProperty("math-agent.agent-worker.outbox.backlog-warn-cooldown-seconds", Long.class, 60L)));
-        String publisherId = environment.getProperty("math-agent.agent-worker.outbox.publisher-id", "agent-worker-outbox");
+        // The batch claim read-back selects rows by locked_by, so each process must publish under its own
+        // identity: a shared configured id would let two instances see each other's claimed rows and
+        // double-publish. The base id keeps logs readable; the nonce makes the claimant unique per process.
+        String publisherId = instancePublisherId(
+                environment.getProperty("math-agent.agent-worker.outbox.publisher-id", "agent-worker-outbox"));
         int batchSize = environment.getProperty("math-agent.agent-worker.outbox.batch-size", Integer.class, 100);
         long leaseSeconds = environment.getProperty("math-agent.agent-worker.outbox.publish-lease-seconds", Long.class, 30L);
         this.publisher = new AgentWorkerTaskOutboxPublisher(
@@ -56,6 +70,30 @@ public class AgentWorkerTaskOutboxScheduler {
 
     @Scheduled(fixedDelayString = "${math-agent.agent-worker.outbox.fixed-delay-ms:1000}")
     public void publishPendingEvents() {
+        publishRound();
+    }
+
+    /**
+     * Wake-on-commit fast path: right after a transaction that enqueued an outbox row commits, run the same
+     * delivery round immediately instead of waiting up to one poll interval. The wake is dispatched onto the
+     * scheduling executor and coalesced, so bursts of submissions queue at most one extra round; the 1s poll
+     * stays untouched as the durability fallback (a lost or duplicate wake changes nothing observable).
+     */
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
+    public void onOutboxWake(AgentWorkerOutboxWakeEvent wake) {
+        if (wakeQueued.compareAndSet(false, true)) {
+            // One-shot immediate schedule on the shared scheduling executor: with the default single-threaded
+            // pool this queues right behind any running poll round, keeping rounds serialized for free.
+            taskScheduler.schedule(() -> {
+                wakeQueued.set(false);
+                publishRound();
+            }, Instant.now());
+        }
+    }
+
+    // synchronized guards overlap between the scheduled thread and the wake task even if the scheduling pool
+    // is enlarged later; two rounds racing the same batch claim would otherwise double-process in-process.
+    private synchronized void publishRound() {
         int recovered = dispatchService.recoverExpiredPublishing(Instant.now());
         if (recovered > 0) {
             publishingLeaseRecovered.increment(recovered);
@@ -66,6 +104,11 @@ public class AgentWorkerTaskOutboxScheduler {
         }
         publisher.publishPendingEvents();
         warnOnBacklog(Instant.now());
+    }
+
+    /** Configured publisher id plus a per-process nonce; see usage site for why claims must be process-unique. */
+    static String instancePublisherId(String base) {
+        return base + "-" + UUID.randomUUID().toString().substring(0, 8);
     }
 
     private void warnOnBacklog(Instant now) {

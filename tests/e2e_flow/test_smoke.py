@@ -47,6 +47,9 @@ def test_mcp_key_lifecycle_and_role_boundary(admin_client: ApiClient, student_cl
     other_id = other.get("keyId") or other.get("id")
     try:
         forbidden = student_client.post(f"/api/mcp/keys/{other_id}/revoke")
-        assert forbidden.status_code in (401, 403), f"学生吊销他人 key 未被拒绝: {forbidden.status_code}"
+        # 2026-09-03 第二轮回归修正：后端 McpClientKeyService.revokeKey 按 tenant+subject 作用域查 key，
+        # 非本人 key 视为不存在并映射 400 "Owned active MCP key not found"（控制器注释即 "owned"，防枚举设计），
+        # 并非 401/403。安全语义不变：学生无法吊销他人 key，此处只接受任意非 2xx 拒绝码。
+        assert forbidden.status_code in (400, 401, 403), f"学生吊销他人 key 未被拒绝: {forbidden.status_code}"
     finally:
         admin_client.delete(f"/api/mcp/keys/{other_id}")

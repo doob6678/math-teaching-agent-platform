@@ -23,9 +23,12 @@ public class AgentWorkerRabbitConfiguration {
     /** The migrated Python graph is one lease-protected command, not four independently acknowledged stages. */
     public static final String PYTHON_HANDOUT_AGENT_CODE = "PythonHandoutAgent";
     public static final String PYTHON_HANDOUT_STAGE_CODE = "python_handout";
+    /** 动画讲题是分钟级长任务（分镜生成+Manim 渲染）；与讲义共用队列，按 stage_code 在消费者内分流。 */
+    public static final String ANIMATED_LESSON_AGENT_CODE = "AnimatedLessonAgent";
+    public static final String ANIMATED_LESSON_STAGE_CODE = "animated_lesson";
     public static final java.util.List<String> SUPPORTED_AGENT_CODES = java.util.List.of(
             "CoursewareAgent", "TeacherAssistantAgent", "HandoutFormatterAgent", "QualityCheckAgent",
-            PYTHON_HANDOUT_AGENT_CODE);
+            PYTHON_HANDOUT_AGENT_CODE, ANIMATED_LESSON_AGENT_CODE);
     @Bean DirectExchange agentWorkerExchange(){ return new DirectExchange(EXCHANGE, true, false); }
     @Bean Queue agentWorkerQueue(){ return org.springframework.amqp.core.QueueBuilder.durable(QUEUE).deadLetterExchange(EXCHANGE).deadLetterRoutingKey(ROUTING_KEY+".dead").build(); }
     @Bean Queue agentWorkerDeadLetterQueue(){ return org.springframework.amqp.core.QueueBuilder.durable(DLQ).build(); }
@@ -37,6 +40,10 @@ public class AgentWorkerRabbitConfiguration {
     /** Routes the whole Python handout graph to the existing lease-protected Agent Worker queue. */
     @Bean Binding pythonHandoutWorkerBinding(DirectExchange agentWorkerExchange, Queue agentWorkerQueue) {
         return BindingBuilder.bind(agentWorkerQueue).to(agentWorkerExchange).with(PYTHON_HANDOUT_AGENT_CODE);
+    }
+    /** Routes animated-lesson commands to the same lease-protected queue; the consumer branches on stage_code. */
+    @Bean Binding animatedLessonWorkerBinding(DirectExchange agentWorkerExchange, Queue agentWorkerQueue) {
+        return BindingBuilder.bind(agentWorkerQueue).to(agentWorkerExchange).with(ANIMATED_LESSON_AGENT_CODE);
     }
     @Bean Binding agentWorkerDeadLetterBinding(DirectExchange agentWorkerExchange, Queue agentWorkerDeadLetterQueue){ return BindingBuilder.bind(agentWorkerDeadLetterQueue).to(agentWorkerExchange).with(ROUTING_KEY+".dead"); }
     /** Uses correlated confirms and mandatory returns; an outbox event is published only after broker ACK. */

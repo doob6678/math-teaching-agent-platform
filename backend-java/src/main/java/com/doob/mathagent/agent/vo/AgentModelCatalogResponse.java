@@ -7,12 +7,16 @@ import java.util.List;
  *
  * @param defaultProviderName backend default provider selected from environment
  * @param defaultModelCode backend default model selected from environment
+ * @param visionDefaultProviderName default provider used when the turn carries an image; empty when none is vision-capable
+ * @param visionDefaultModelCode default model used when the turn carries an image; empty when none is vision-capable
  * @param fallbackProviderOrder provider fallback rotation order
  * @param providers enabled providers and allow-listed models
  */
 public record AgentModelCatalogResponse(
         String defaultProviderName,
         String defaultModelCode,
+        String visionDefaultProviderName,
+        String visionDefaultModelCode,
         List<String> fallbackProviderOrder,
         List<Provider> providers) {
 
@@ -37,7 +41,8 @@ public record AgentModelCatalogResponse(
      * @param modelCode provider model code
      * @param modelLevel coarse capability label
      * @param priceTier coarse price label
+     * @param vision whether the model was probe-verified to accept image input
      */
-    public record Model(String modelCode, String modelLevel, String priceTier) {
+    public record Model(String modelCode, String modelLevel, String priceTier, boolean vision) {
     }
 }

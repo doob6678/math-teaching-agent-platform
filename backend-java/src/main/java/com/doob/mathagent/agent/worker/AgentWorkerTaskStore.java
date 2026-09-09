@@ -119,6 +119,18 @@ public class AgentWorkerTaskStore {
         return updated == 1 && retry ? toTask(mapper.selectById(task.taskId())) : null;
     }
 
+    /**
+     * 按任务 id 读取 durable task，供 animated_lesson 等 API 轮询使用。
+     *
+     * <p>任务行本身不含 subject，调用方必须再经 workflow 行做可见性校验；这里不做权限判断。</p>
+     */
+    public java.util.Optional<AgentWorkerTask> find(String taskId) {
+        if (taskId == null || taskId.isBlank()) {
+            return java.util.Optional.empty();
+        }
+        return java.util.Optional.ofNullable(mapper.selectById(taskId.strip())).map(AgentWorkerTaskStore::toTask);
+    }
+
     /** Returns true only after a lease owner has durably made this task terminal. */
     public boolean isFailed(String taskId) {
         AgentWorkerTaskEntity entity = mapper.selectById(taskId);

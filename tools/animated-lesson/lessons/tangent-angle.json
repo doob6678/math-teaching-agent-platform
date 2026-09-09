@@ -1,0 +1,305 @@
+{
+  "schema": "lesson-plan/v1",
+  "id": "tangent-angle",
+  "title": "一题一课 · 圆外两切线的夹角（2023 新课标Ⅰ卷 T6）",
+  "problem": {
+    "stem": "过点 $(0,-2)$ 与圆 $x^2+y^2-4x-1=0$ 相切的两条直线的夹角为 $\\alpha$，则 $\\sin\\alpha=$（  ）A. $1$  B. $\\frac{\\sqrt{15}}{4}$  C. $\\frac{\\sqrt{10}}{4}$  D. $\\frac{\\sqrt{6}}{4}$",
+    "known": [
+      "圆 $x^2+y^2-4x-1=0$，即 $(x-2)^2+y^2=5$",
+      "外点 $P(0,-2)$",
+      "两切线夹角为 $\\alpha$"
+    ],
+    "goal": "求 $\\sin\\alpha$",
+    "core_observation": "连半径构造直角三角形：切线长 $\\sqrt{3}$，半角正弦余弦易求，倍角公式合成 $\\sin\\angle APB$；$\\angle APB$ 为钝角，$\\alpha$ 与其互补、正弦相同。",
+    "answer": "B（$\\frac{\\sqrt{15}}{4}$）"
+  },
+  "view": {
+    "x": [
+      -2.6,
+      5.6
+    ],
+    "y": [
+      -3.4,
+      3.4
+    ],
+    "axes": true,
+    "ticks": {}
+  },
+  "objects": {
+    "C": {
+      "type": "point",
+      "at": [
+        2,
+        0
+      ],
+      "label": "$C(2,0)$"
+    },
+    "c": {
+      "type": "circle",
+      "center": "C",
+      "radius": 2.2360679
+    },
+    "P": {
+      "type": "point",
+      "at": [
+        0,
+        -2
+      ],
+      "label": "$P(0,-2)$"
+    },
+    "A": {
+      "type": "tangent_point",
+      "from": "P",
+      "circle": "c",
+      "branch": "ccw",
+      "label": "A"
+    },
+    "B": {
+      "type": "tangent_point",
+      "from": "P",
+      "circle": "c",
+      "branch": "cw",
+      "label": "B"
+    },
+    "linePA": {
+      "type": "line",
+      "from": "P",
+      "to": "A",
+      "style": "main",
+      "extend": 0.22
+    },
+    "linePB": {
+      "type": "line",
+      "from": "P",
+      "to": "B",
+      "style": "main",
+      "extend": 0.22
+    },
+    "segCA": {
+      "type": "segment",
+      "from": "C",
+      "to": "A",
+      "style": "aux"
+    },
+    "segCB": {
+      "type": "segment",
+      "from": "C",
+      "to": "B",
+      "style": "aux"
+    },
+    "segCP": {
+      "type": "segment",
+      "from": "C",
+      "to": "P",
+      "style": "aux",
+      "dashed": true
+    },
+    "angA": {
+      "type": "angle",
+      "at": "A",
+      "from": "C",
+      "to": "P",
+      "style": "square"
+    },
+    "angB": {
+      "type": "angle",
+      "at": "B",
+      "from": "C",
+      "to": "P",
+      "style": "square"
+    },
+    "angP": {
+      "type": "angle",
+      "at": "P",
+      "from": "A",
+      "to": "B",
+      "radius": 0.55
+    }
+  },
+  "chapters": [
+    {
+      "id": "ch1",
+      "title": "题目呈现",
+      "subtitle": "过外点作两条切线",
+      "narration": "来看 2023 年新课标一卷这道选择题。过点 P 零逗负二，向圆作两条切线，夹角为 α，求正弦值。先把圆和两条切线画出来。",
+      "steps": [
+        {
+          "op": "draw",
+          "ref": "c"
+        },
+        {
+          "op": "show",
+          "ref": "P"
+        },
+        {
+          "op": "label",
+          "ref": "P",
+          "offset": [
+            0.35,
+            -0.45
+          ]
+        },
+        {
+          "op": "draw",
+          "ref": "linePA"
+        },
+        {
+          "op": "draw",
+          "ref": "linePB"
+        },
+        {
+          "op": "label",
+          "ref": "A",
+          "offset": [
+            -0.15,
+            0.4
+          ]
+        },
+        {
+          "op": "label",
+          "ref": "B",
+          "offset": [
+            -0.55,
+            0.3
+          ]
+        },
+        {
+          "op": "draw",
+          "ref": "angP"
+        },
+        {
+          "op": "label",
+          "ref": "P",
+          "text": "α",
+          "at": [
+            0.42,
+            -1.5
+          ]
+        },
+        {
+          "op": "caption",
+          "text": "两切线夹角 $\\alpha$，求 $\\sin\\alpha$"
+        },
+        {
+          "op": "note",
+          "text": "选项：A.$1$ B.$\\frac{\\sqrt{15}}{4}$ C.$\\frac{\\sqrt{10}}{4}$ D.$\\frac{\\sqrt{6}}{4}$"
+        }
+      ]
+    },
+    {
+      "id": "ch2",
+      "title": "配方定圆",
+      "subtitle": "一般式 → 标准式",
+      "narration": "圆是一般式给的，先配方：x 减二的平方加 y 平方等于五。圆心 C 二逗零，半径根号五。",
+      "steps": [
+        {
+          "op": "caption",
+          "text": "$x^2+y^2-4x-1=0$ → $(x-2)^2+y^2=5$"
+        },
+        {
+          "op": "note",
+          "kind": "formula",
+          "text": "x^2+y^2-4x-1=0 \\Rightarrow (x-2)^2+y^2=5"
+        },
+        {
+          "op": "show",
+          "ref": "C"
+        },
+        {
+          "op": "label",
+          "ref": "C",
+          "offset": [
+            0.15,
+            -0.5
+          ]
+        }
+      ]
+    },
+    {
+      "id": "ch3",
+      "title": "连半径造直角",
+      "subtitle": "切线长的来源",
+      "narration": "遇切线，连半径。连接 CA、CB 和 CP，得到两个直角三角形。PC 等于二根号二，半径根号五，所以切线长 PA 等于根号三。",
+      "steps": [
+        {
+          "op": "draw",
+          "ref": "segCA"
+        },
+        {
+          "op": "draw",
+          "ref": "segCB"
+        },
+        {
+          "op": "draw",
+          "ref": "segCP"
+        },
+        {
+          "op": "draw",
+          "ref": "angA"
+        },
+        {
+          "op": "draw",
+          "ref": "angB"
+        },
+        {
+          "op": "caption",
+          "text": "$CA\\perp PA$，$CB\\perp PB$；$|PC|=2\\sqrt{2}$"
+        },
+        {
+          "op": "note",
+          "kind": "formula",
+          "text": "|PA|=|PB|=\\sqrt{|PC|^2-r^2}=\\sqrt{3}"
+        }
+      ]
+    },
+    {
+      "id": "ch4",
+      "title": "半角入手",
+      "subtitle": "先求 ∠APC 的正弦余弦",
+      "narration": "CP 平分夹角，先攻半角。直角三角形 PAC 里，半角的正弦等于根号五比二根号二，即四分之根号十；余弦四分之根号六。",
+      "steps": [
+        {
+          "op": "highlight",
+          "refs": [
+            "segCP",
+            "segCA"
+          ]
+        },
+        {
+          "op": "caption",
+          "text": "半角：$\\sin\\angle APC=\\frac{\\sqrt{10}}{4}$，$\\cos\\angle APC=\\frac{\\sqrt{6}}{4}$"
+        },
+        {
+          "op": "note",
+          "kind": "formula",
+          "text": "\\sin\\angle APC=\\frac{\\sqrt5}{2\\sqrt2}=\\frac{\\sqrt{10}}{4},\\ \\cos\\angle APC=\\frac{\\sqrt6}{4}"
+        }
+      ]
+    },
+    {
+      "id": "ch5",
+      "title": "倍角合成",
+      "subtitle": "钝角修正，正弦不变",
+      "narration": "倍角公式合成：sin∠APB 等于二乘四分之根号十乘四分之根号六，等于四分之根号十五。注意余弦为负，∠APB 是钝角，α 与它互补，正弦相同。答案选 B。",
+      "steps": [
+        {
+          "op": "caption",
+          "text": "$\\sin\\angle APB=2\\cdot\\frac{\\sqrt{10}}{4}\\cdot\\frac{\\sqrt{6}}{4}=\\frac{\\sqrt{15}}{4}$"
+        },
+        {
+          "op": "note",
+          "kind": "formula",
+          "text": "\\sin\\angle APB=2\\cdot\\frac{\\sqrt{10}}{4}\\cdot\\frac{\\sqrt6}{4}=\\frac{\\sqrt{15}}{4}"
+        },
+        {
+          "op": "note",
+          "text": "$\\angle APB$ 为钝角，$\\alpha=\\pi-\\angle APB$，正弦相同"
+        },
+        {
+          "op": "answer",
+          "text": "\\sin\\alpha=\\frac{\\sqrt{15}}{4}"
+        }
+      ]
+    }
+  ]
+}

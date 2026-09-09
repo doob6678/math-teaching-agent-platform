@@ -1,0 +1,359 @@
+{
+  "schema": "lesson-plan/v1",
+  "id": "q-016",
+  "title": "一题一课 · 椭圆中的垂直弦与周长转化",
+  "problem": {
+    "stem": "已知椭圆 $C:\\frac{x^2}{a^2}+\\frac{y^2}{b^2}=1$（$a>b>0$），上顶点为 $A$，焦点为 $F_1$、$F_2$，离心率 $e=\\frac{1}{2}$。过 $F_1$ 且垂直于 $AF_2$ 的直线与 $C$ 交于 $D$、$E$ 两点，$|DE|=6$。求 $\\triangle ADE$ 的周长。",
+    "known": [
+      "椭圆标准方程，$a>b>0$",
+      "离心率 $e=c/a=1/2$，故 $a=2c$，$b^2=a^2-c^2=3c^2$",
+      "上顶点 $A(0,b)$，焦点 $F_1(-c,0)$、$F_2(c,0)$",
+      "直线 $DE$ 过 $F_1$ 且 $DE \\perp AF_2$",
+      "$|DE|=6$"
+    ],
+    "goal": "求 $\\triangle ADE$ 的周长",
+    "core_observation": "利用对称性将 $AD$、$AE$ 转化为 $DF_2$、$EF_2$，使 $\\triangle ADE$ 周长等于 $\\triangle DF_2E$ 周长；再由椭圆定义，$|DF_1|+|DF_2|=2a$，$|EF_1|+|EF_2|=2a$，故总周长为 $4a$。",
+    "answer": "13"
+  },
+  "view": {
+    "x": [
+      -7.5,
+      3.5
+    ],
+    "y": [
+      -1.5,
+      8.5
+    ],
+    "axes": true,
+    "ticks": {
+      "x": [
+        -1,
+        1
+      ],
+      "y": [
+        2
+      ]
+    }
+  },
+  "objects": {
+    "O": {
+      "type": "point",
+      "at": [
+        0,
+        0
+      ],
+      "label": "$O$"
+    },
+    "F1": {
+      "type": "point",
+      "at": [
+        -1,
+        0
+      ],
+      "label": "$F_1(-c,0)$"
+    },
+    "F2": {
+      "type": "point",
+      "at": [
+        1,
+        0
+      ],
+      "label": "$F_2(c,0)$"
+    },
+    "A": {
+      "type": "point",
+      "at": [
+        0,
+        2
+      ],
+      "label": "$A(0,b)$"
+    },
+    "ellipse": {
+      "type": "function",
+      "expr": "sqrt(3*(1 - x**2/4))",
+      "x": [
+        -2,
+        2
+      ]
+    },
+    "segAF2": {
+      "type": "segment",
+      "from": "A",
+      "to": "F2",
+      "style": "aux"
+    },
+    "lineDE": {
+      "type": "line",
+      "from": "F1",
+      "to": [
+        1,
+        1.732
+      ],
+      "extend": 0.25,
+      "style": "aux"
+    },
+    "D": {
+      "type": "point",
+      "at": [
+        -1.2,
+        1.3
+      ],
+      "label": "$D$"
+    },
+    "E": {
+      "type": "point",
+      "at": [
+        0.8,
+        -0.7
+      ],
+      "label": "$E$"
+    },
+    "segDE": {
+      "type": "segment",
+      "from": "D",
+      "to": "E",
+      "style": "main"
+    },
+    "segAD": {
+      "type": "segment",
+      "from": "A",
+      "to": "D",
+      "style": "hl"
+    },
+    "segAE": {
+      "type": "segment",
+      "from": "A",
+      "to": "E",
+      "style": "hl"
+    },
+    "segDF2": {
+      "type": "segment",
+      "from": "D",
+      "to": "F2",
+      "style": "aux"
+    },
+    "segEF2": {
+      "type": "segment",
+      "from": "E",
+      "to": "F2",
+      "style": "aux"
+    },
+    "angAtF2": {
+      "type": "angle",
+      "at": "F2",
+      "from": "A",
+      "to": "O",
+      "radius": 0.8,
+      "style": "square"
+    }
+  },
+  "chapters": [
+    {
+      "id": "ch1",
+      "title": "题图初建",
+      "subtitle": "标出关键点，写出椭圆参数关系",
+      "narration": "我们先画出椭圆和它的关键点。上顶点 A 在 y 轴正半轴，两个焦点 F₁、F₂ 关于原点对称。离心率是二分之一，说明 c 比 a 小一半，所以 a 等于 2c。再用 b² = a² − c²，算出 b² = 3c²。椭圆方程就变成 x²/(4c²) + y²/(3c²) = 1。",
+      "steps": [
+        {
+          "op": "draw",
+          "ref": "ellipse"
+        },
+        {
+          "op": "show",
+          "ref": "O"
+        },
+        {
+          "op": "label",
+          "ref": "O",
+          "offset": [
+            -0.35,
+            -0.4
+          ]
+        },
+        {
+          "op": "show",
+          "ref": "F1"
+        },
+        {
+          "op": "label",
+          "ref": "F1",
+          "offset": [
+            -0.55,
+            -0.4
+          ]
+        },
+        {
+          "op": "show",
+          "ref": "F2"
+        },
+        {
+          "op": "label",
+          "ref": "F2",
+          "offset": [
+            0.35,
+            -0.4
+          ]
+        },
+        {
+          "op": "show",
+          "ref": "A"
+        },
+        {
+          "op": "label",
+          "ref": "A",
+          "offset": [
+            0.25,
+            0.35
+          ]
+        },
+        {
+          "op": "caption",
+          "text": "设 $c=1$（单位缩放），则 $a=2$，$b=\\sqrt{3}$"
+        },
+        {
+          "op": "note",
+          "text": "椭圆：$\\frac{x^2}{4}+\\frac{y^2}{3}=1$"
+        }
+      ]
+    },
+    {
+      "id": "ch2",
+      "title": "构造垂直线",
+      "subtitle": "作过 $F_1$ 且 $\\perp AF_2$ 的直线",
+      "narration": "题目说 DE 过 F₁ 且垂直于 AF₂。我们先连 AF₂，观察三角形 AF₂O：AO = b = √3，OF₂ = c = 1，所以 tan∠AF₂O = √3，即这个角是 60°。那么垂直于 AF₂ 的直线斜率就是 -1/√3，也就是方向向量 (1, -√3)，但更直观的是写成 x = √3 y − c。这条直线与椭圆交于 D、E。",
+      "steps": [
+        {
+          "op": "draw",
+          "ref": "segAF2"
+        },
+        {
+          "op": "draw",
+          "ref": "lineDE"
+        },
+        {
+          "op": "caption",
+          "text": "$DE \\perp AF_2$，过 $F_1$"
+        },
+        {
+          "op": "note",
+          "kind": "formula",
+          "text": "\\angle AF_2O = 60^\\circ \\Rightarrow \\text{斜率}_{AF_2} = -\\sqrt{3} \\Rightarrow \\text{斜率}_{DE} = \\frac{1}{\\sqrt{3}}"
+        },
+        {
+          "op": "note",
+          "text": "直线 $DE$：$x = \\frac{1}{\\sqrt{3}}y - 1$（或等价形式）"
+        }
+      ]
+    },
+    {
+      "id": "ch3",
+      "title": "弦长代入求参",
+      "subtitle": "联立求交点，用弦长定理反解 $c$",
+      "narration": "把直线方程代入椭圆，整理得到关于 y 的二次方程。用弦长公式 |DE| = √(1 + k²)·|y₁ − y₂|，其中 |y₁ − y₂| = √Δ / |a|。题目给出 |DE| = 6，代入后解得 c = 13/8，于是 a = 2c = 13/4。",
+      "steps": [
+        {
+          "op": "draw",
+          "ref": "segDE"
+        },
+        {
+          "op": "show",
+          "ref": "D"
+        },
+        {
+          "op": "label",
+          "ref": "D",
+          "offset": [
+            -0.55,
+            0.35
+          ]
+        },
+        {
+          "op": "show",
+          "ref": "E"
+        },
+        {
+          "op": "label",
+          "ref": "E",
+          "offset": [
+            0.45,
+            -0.45
+          ]
+        },
+        {
+          "op": "caption",
+          "text": "联立得 $13y^2 - 6\\sqrt{3}cy - 9c^2 = 0$"
+        },
+        {
+          "op": "note",
+          "kind": "formula",
+          "text": "|DE| = \\sqrt{1 + \\left(\\frac{1}{\\sqrt{3}}\\right)^2} \\cdot \\frac{\\sqrt{\\Delta}}{13} = 6 \\Rightarrow c = \\frac{13}{8}"
+        }
+      ]
+    },
+    {
+      "id": "ch4",
+      "title": "对称转化周长",
+      "subtitle": "利用垂直平分线性质，替换边长",
+      "narration": "注意到 DE 是 AF₂ 的垂直平分线——因为 F₁ 在 x 轴上，AF₂ 斜率为负，而 DE 过 F₁ 且垂直，又 A 和 F₂ 关于 DE 对称。所以 AD = DF₂，AE = EF₂。这样三角形 ADE 的周长就变成了 DF₂ + EF₂ + DE，也就是三角形 DF₂E 的周长。",
+      "steps": [
+        {
+          "op": "highlight",
+          "refs": [
+            "segAD",
+            "segDF2"
+          ],
+          "color": "hl"
+        },
+        {
+          "op": "highlight",
+          "refs": [
+            "segAE",
+            "segEF2"
+          ],
+          "color": "hl"
+        },
+        {
+          "op": "caption",
+          "text": "由对称性：$AD = DF_2$，$AE = EF_2$"
+        },
+        {
+          "op": "note",
+          "text": "$\\triangle ADE$ 周长 $= DF_2 + EF_2 + DE$"
+        }
+      ]
+    },
+    {
+      "id": "ch5",
+      "title": "椭圆定义收束",
+      "subtitle": "用定义把折线段变定值",
+      "narration": "现在看 DF₂ + EF₂ + DE。而 DE 是直线段，但它恰好经过左焦点 F₁！所以 DE = DF₁ + EF₁。于是整个周长变成 DF₁ + DF₂ + EF₁ + EF₂。根据椭圆定义，D 到两焦点距离和是 2a，E 也是 2a，加起来就是 4a。代入 a = 13/4，得周长为 13。",
+      "steps": [
+        {
+          "op": "draw",
+          "ref": "segDF2"
+        },
+        {
+          "op": "draw",
+          "ref": "segEF2"
+        },
+        {
+          "op": "draw",
+          "ref": "segDE"
+        },
+        {
+          "op": "caption",
+          "text": "$DE = DF_1 + EF_1$（因 $F_1$ 在 $DE$ 上）"
+        },
+        {
+          "op": "note",
+          "kind": "formula",
+          "text": "|DF_1| + |DF_2| = 2a,\\ |EF_1| + |EF_2| = 2a \\Rightarrow \\text{周长} = 4a"
+        },
+        {
+          "op": "answer",
+          "text": "13"
+        }
+      ]
+    }
+  ]
+}

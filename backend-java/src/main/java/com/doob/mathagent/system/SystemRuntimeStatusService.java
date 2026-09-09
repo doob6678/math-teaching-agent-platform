@@ -110,11 +110,15 @@ public class SystemRuntimeStatusService {
     }
 
     private SystemRuntimeStatusResponse.AiStatus aiStatus() {
+        // 2026-09-08：列表必须含 glm。学生问答默认 provider 切到 glm 后，此方法用 providers 反查
+        // defaultProvider；漏掉 glm 会让 readiness 误报 AI_DEFAULT_PROVIDER_NOT_CONFIGURED 并把
+        // compose 健康检查拖成 unhealthy。聚合顺序与 AiProviderCatalog.configuredProviders 保持一致。
         List<SystemRuntimeStatusResponse.AiProviderStatus> providers = List.of(
                 aiProviderStatus(aiProviderProperties.getOpenai()),
                 aiProviderStatus(aiProviderProperties.getDashscope()),
                 aiProviderStatus(aiProviderProperties.getDeepseek()),
-                aiProviderStatus(aiProviderProperties.getArk()));
+                aiProviderStatus(aiProviderProperties.getArk()),
+                aiProviderStatus(aiProviderProperties.getGlm()));
         String defaultProviderName = safe(aiProviderProperties.getDefaultProvider()).strip().toLowerCase();
         SystemRuntimeStatusResponse.AiProviderStatus defaultProvider = providers.stream()
                 .filter(provider -> provider.providerName().equals(defaultProviderName))

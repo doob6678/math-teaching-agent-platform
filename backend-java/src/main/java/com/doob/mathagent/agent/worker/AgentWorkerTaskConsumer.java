@@ -1,6 +1,7 @@
 package com.doob.mathagent.agent.worker;
 
 import com.doob.mathagent.agent.dto.MultiAgentWritingRequest;
+import com.doob.mathagent.agent.service.AnimatedLessonService;
 import com.doob.mathagent.agent.service.MultiAgentWritingService;
 import com.doob.mathagent.agent.service.HandoutRunMetricsStore;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -40,6 +41,8 @@ public class AgentWorkerTaskConsumer {
     private final AgentWorkerTaskStore store;
     private final AgentWorkerTaskDispatchService dispatchService;
     private final MultiAgentWritingService writingService;
+    /** 动画讲题 stage 的执行体；与讲义共用租约/心跳/失败重试，只是 Python 端点与结果落库不同。 */
+    private final AnimatedLessonService animatedLessonService;
     private final ObjectMapper objectMapper;
     private final Environment environment;
     private HandoutRunMetricsStore metricsStore;
@@ -49,11 +52,13 @@ public class AgentWorkerTaskConsumer {
             AgentWorkerTaskStore store,
             AgentWorkerTaskDispatchService dispatchService,
             MultiAgentWritingService writingService,
+            AnimatedLessonService animatedLessonService,
             ObjectMapper objectMapper,
             Environment environment) {
         this.store = store;
         this.dispatchService = dispatchService;
         this.writingService = writingService;
+        this.animatedLessonService = animatedLessonService;
         this.objectMapper = objectMapper;
         this.environment = environment;
     }
@@ -131,6 +136,12 @@ public class AgentWorkerTaskConsumer {
     }
 
     private void executeStage(AgentWorkerTask task) throws Exception {
+        // 动画讲题的 request 不是讲义 MultiAgentWritingRequest，必须在反序列化讲义类型之前分流；
+        // 结果持久化与身份复原由 AnimatedLessonService 复用同一 workflow 行完成。
+        if (AgentWorkerRabbitConfiguration.ANIMATED_LESSON_STAGE_CODE.equals(task.stageCode())) {
+            animatedLessonService.executeDispatched(task);
+            return;
+        }
         JsonNode payload = objectMapper.readTree(task.requestJson());
         MultiAgentWritingRequest request = objectMapper.treeToValue(
                 payload.required("request"), MultiAgentWritingRequest.class);

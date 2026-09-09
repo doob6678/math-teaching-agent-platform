@@ -1,0 +1,297 @@
+/* 一题一课 HTML 播放器样式。
+   视觉路线取自参考视频（B站 Tom张数学《一元二次方程的四种解法》）：
+   浅米色方格纸底 + 红黑大字标题 + 顶部章节进度（当前章加粗、其余灰显）
+   + 荧光笔高亮 + 底部描边字幕。几何功能色沿用 lesson_runtime.py 的纸面配色，
+   保证网页版与 Manim 视频版同一套语义色（蓝主体/绿辅助/橙强调/红结论）。 */
+
+:root {
+  --paper: #FAF8F2;
+  --ink: #1F2937;
+  --blue: #4D6BFE;   /* main：题目主体 */
+  --green: #0E9F6E;  /* aux：辅助线 */
+  --orange: #E8890C; /* hl：关键变量/强调 */
+  --red: #DC2626;    /* ans：结论 */
+  --gray: #9CA3AF;
+  --title-red: #C0392B;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body { height: 100%; }
+
+body {
+  font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+  color: var(--ink);
+  background-color: var(--paper);
+  /* 方格纸：淡绿细格，26px 一格，对齐参考视频底纹 */
+  background-image:
+    repeating-linear-gradient(0deg, rgba(120, 160, 120, .10) 0 1px, transparent 1px 26px),
+    repeating-linear-gradient(90deg, rgba(120, 160, 120, .10) 0 1px, transparent 1px 26px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  user-select: none;
+}
+
+/* ---------- 顶部 ---------- */
+#topbar {
+  flex: 0 0 auto;
+  padding: 10px 28px 4px;
+  position: relative;
+}
+#title {
+  text-align: center;
+  font-size: 27px;
+  font-weight: 900;
+  letter-spacing: 2px;
+  padding: 0 240px; /* 给右上课程 tab 让位，长标题不与其重叠 */
+}
+#title .t-red { color: var(--title-red); }
+#chapters {
+  display: flex;
+  justify-content: center;
+  gap: 26px;
+  margin-top: 4px;
+  flex-wrap: wrap;
+}
+.chap {
+  font-size: 15px;
+  color: #c9cdd4;
+  cursor: pointer;
+  transition: all .25s;
+  white-space: nowrap;
+}
+.chap.done { color: var(--gray); }
+.chap.cur {
+  color: var(--ink);
+  font-weight: 900;
+  font-size: 19px;
+  /* 当前章加荧光笔底，参考视频高亮手法 */
+  background: linear-gradient(transparent 62%, #fde68a 62%);
+}
+#lesson-tabs {
+  position: absolute;
+  right: 20px;
+  top: 12px;
+  display: flex;
+  gap: 8px;
+}
+.tab {
+  font-size: 12px;
+  padding: 4px 10px;
+  border: 1px solid #d5d2c8;
+  border-radius: 14px;
+  background: #fffdf7;
+  cursor: pointer;
+  color: #6b7280;
+}
+.tab.on { border-color: var(--blue); color: var(--blue); font-weight: 700; }
+
+/* ---------- 主舞台 ---------- */
+#stage {
+  flex: 1 1 auto;
+  display: flex;
+  gap: 14px;
+  padding: 2px 22px 4px;
+  min-height: 0;
+}
+#canvas-wrap {
+  position: relative;
+  flex: 0 0 60%;
+  min-width: 0;
+}
+#board { width: 100%; height: 100%; display: block; }
+
+/* 标签层：KaTeX 点标注用 HTML 绝对定位（SVG 内无法直接排 LaTeX） */
+#labels { position: absolute; inset: 0; pointer-events: none; }
+.lab {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  font-size: 15px;
+  color: var(--ink);
+  opacity: 0;
+  transition: opacity .4s;
+  white-space: nowrap;
+}
+.lab.show { opacity: 1; }
+.lab .katex { font-size: 1.05em; }
+
+/* 左上角常驻章节小牌（对齐 runtime 的 banner_small 常驻设计） */
+#chapter-chip {
+  position: absolute;
+  left: 8px;
+  top: 6px;
+  z-index: 5;
+  background: rgba(77, 107, 254, .92);
+  color: #fff;
+  border-radius: 8px;
+  padding: 5px 12px;
+  font-size: 13px;
+  line-height: 1.35;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, .15);
+}
+#chapter-chip .chip-sub { font-size: 11px; opacity: .85; }
+
+/* 章横幅：进入新章时中央大字闪现 1.1s 后淡出（参考视频章节切换手法） */
+#banner {
+  position: absolute;
+  left: 50%;
+  top: 34%;
+  transform: translate(-50%, -50%) scale(.92);
+  text-align: center;
+  font-size: 40px;
+  font-weight: 900;
+  color: var(--ink);
+  opacity: 0;
+  pointer-events: none;
+  z-index: 6;
+}
+#banner .bn-sub {
+  font-size: 18px;
+  font-weight: 700;
+  margin-top: 8px;
+  display: inline-block;
+  background: linear-gradient(transparent 55%, #fde68a 55%);
+  padding: 0 10px;
+}
+#banner.pop { animation: bn 1.3s ease forwards; }
+@keyframes bn {
+  0% { opacity: 0; transform: translate(-50%, -50%) scale(.9); }
+  18% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  72% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+/* 结论卡：绿框红字（runtime answer 同款），弹出动画。
+   放画布右上：两课图形都偏左/偏中，右上是稳定空白区，不遮图形 */
+#answer-card {
+  position: absolute;
+  left: 72%;
+  top: 20%;
+  transform: translate(-50%, -50%) scale(.6);
+  border: 3px solid var(--green);
+  background: #fffdf7;
+  border-radius: 12px;
+  padding: 12px 26px;
+  color: var(--red);
+  font-weight: 900;
+  opacity: 0;
+  pointer-events: none;
+  z-index: 7;
+}
+#answer-card .katex { font-size: 1.7em; }
+#answer-card.pop { animation: pop .5s cubic-bezier(.2, 1.6, .4, 1) forwards; }
+@keyframes pop { to { opacity: 1; transform: translate(-50%, -50%) scale(1); } }
+
+#click-hint {
+  position: absolute;
+  right: 10px;
+  bottom: 6px;
+  font-size: 11px;
+  color: #b8b2a4;
+}
+
+/* ---------- SVG 几何元素 ---------- */
+.geo { fill: none; stroke-linecap: round; }
+/* 逐笔绘制：pathLength=1 + dashoffset 1→0（CSS transition 驱动，见 player.js） */
+.stroke-anim { stroke-dasharray: 1; stroke-dashoffset: 1; }
+.stroke-drawn { stroke-dashoffset: 0; }
+.fade-anim { opacity: 0; }
+.fade-drawn { opacity: 1; transition: opacity .5s; }
+.hl-pulse { animation: hlp 1.2s ease; }
+@keyframes hlp {
+  0%, 100% { filter: none; }
+  30%, 70% { filter: drop-shadow(0 0 6px var(--orange)); stroke: var(--orange); }
+}
+.axis { stroke: var(--ink); stroke-width: 2; }
+.axis-txt { fill: var(--ink); font-size: 16px; font-style: italic; font-family: "Times New Roman", serif; }
+.tick-txt { fill: var(--ink); font-size: 14px; font-family: "Microsoft YaHei", sans-serif; }
+
+/* ---------- 右侧笔记本 ---------- */
+#notebook {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 4px 2px;
+}
+#stem-card {
+  flex: 0 0 auto;
+  background: #fffdf7;
+  border: 1px solid #e4dfd2;
+  border-left: 4px solid var(--title-red);
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 13.5px;
+  line-height: 1.65;
+  max-height: 30%;
+  overflow: auto;
+}
+#stem-card .stem-goal { color: var(--title-red); font-weight: 700; }
+#notes {
+  flex: 1 1 auto;
+  overflow: hidden auto;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end; /* 板书从顶部累积；行多时自动上移（对齐 runtime 笔记本行为） */
+  gap: 9px;
+  padding: 6px 4px 52px; /* 底部留白：控制条悬浮在右下，避免压住末行板书 */
+}
+.note-line {
+  font-size: 15px;
+  line-height: 1.5;
+  opacity: 0;
+  transform: translateY(6px);
+  transition: opacity .45s, transform .45s;
+}
+.note-line.show { opacity: 1; transform: none; }
+.note-line.formula { text-align: center; font-size: 17px; }
+.note-line.formula .katex { font-size: 1.25em; }
+
+/* ---------- 底部字幕 ---------- */
+#caption-bar {
+  flex: 0 0 auto;
+  text-align: center;
+  padding: 2px 16px 6px;
+  min-height: 34px;
+}
+#caption {
+  display: inline-block;
+  font-size: 19px;
+  font-weight: 800;
+  color: var(--ink);
+  /* 参考视频字幕：黑体白描边 */
+  text-shadow: 0 0 4px #fff, 0 0 4px #fff, 0 0 6px #fff;
+  opacity: 0;
+  transition: opacity .35s;
+}
+#caption.show { opacity: 1; }
+#caption .katex { font-size: 1.1em; }
+
+/* ---------- 控制条 ---------- */
+#controls {
+  position: fixed;
+  right: 18px;
+  bottom: 44px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  z-index: 20;
+}
+#controls button {
+  font-family: inherit;
+  font-size: 14px;
+  padding: 6px 14px;
+  border-radius: 18px;
+  border: 1px solid #cfd6e8;
+  background: #fffdf7;
+  color: var(--ink);
+  cursor: pointer;
+}
+#controls button:hover { border-color: var(--blue); color: var(--blue); }
+#btn-next { font-weight: 700; }
+#step-indicator { font-size: 12px; color: var(--gray); min-width: 52px; text-align: center; }
+
+/* 动画加速（点击跳过当前动画时整体瞬时化） */
+body.noanim * { transition: none !important; animation-duration: .01s !important; }

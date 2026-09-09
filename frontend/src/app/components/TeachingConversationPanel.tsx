@@ -51,9 +51,9 @@ export type TeachingConversationThreadItem =
       progress?: StudentExplanationStreamProgress;
       /** Text delta received from the live model stream. */
       liveContent?: string;
-      /** Compatibility-only provider reasoning field. Raw reasoning is intentionally never rendered to the learner. */
+      /** 模型思考增量累计；2026-09-06 老板拍板思考对学生可见并计入首字（教学推理无害，答案与来源仍与正文隔离）。 */
       liveThinking?: string;
-      /** 提交到首个内容增量到达的毫秒数（TTFT）。用于在界面上如实展示首 token 响应速度。 */
+      /** 提交到首个可见字符（思考或正文，先到算谁）的毫秒数。用于在界面上如实展示首 token 响应速度。 */
       firstTokenMs?: number;
       /** 提交到流式回合完整结束的毫秒数，与 firstTokenMs 一起构成速度展示。 */
       totalMs?: number;
@@ -191,6 +191,10 @@ export function TeachingConversationPanel({
   }
 
   const composerError = imageError || clipboardError;
+  // 老板 2026-09-06 拍板：显式选文本模型又带图时，前端直接提示"不支持图片"并阻止提交；
+  // 后端 providerRoute 同样拒绝（双保险），只有"自动"路由才会切到视觉默认。
+  const hasImageAttached = Boolean(imageDraft) || uploadingImage;
+  const imageModelUnsupported = hasImageAttached && !selectedModelSupportsImage(modelCatalog, selectedModel);
 
   return (
     <section
@@ -406,13 +410,26 @@ export function TeachingConversationPanel({
                 </button>
                 {/* 模型切换（老板 2026-09-01）：目录来自后端白名单，选择仅作路由偏好，权限与校验仍在后端。
                     老板反馈原生 select 在嵌入式浏览器里点击弹不出选项，改为 button+menu 的自定义下拉。 */}
-                <ModelPicker catalog={modelCatalog} value={selectedModel} onChange={onModelChange} />
+                <ModelPicker
+                  catalog={modelCatalog}
+                  value={selectedModel}
+                  onChange={onModelChange}
+                  hasImage={hasImageAttached}
+                />
               </div>
-              <button className="teaching-send-btn" type="submit" disabled={loading || uploadingImage || (!value.trim() && !imageDraft)}>
+              <button
+                className="teaching-send-btn"
+                type="submit"
+                title={imageModelUnsupported ? "所选模型不支持图片输入" : undefined}
+                disabled={loading || uploadingImage || imageModelUnsupported || (!value.trim() && !imageDraft)}
+              >
                 {loading ? <Loader2 className="spin" size={17} /> : <ArrowUp size={18} />}
               </button>
             </div>
           </div>
+          {imageModelUnsupported ? (
+            <div className="teaching-inline-hint">所选模型不支持图片输入，请切换到带"视觉"标记的模型，或移除题图。</div>
+          ) : null}
           {composerError ? <div className="teaching-inline-error">{composerError}</div> : null}
         </div>
         <div className="teaching-composer-disclaimer">内容由 AI 生成，请自行核对重要信息。</div>
@@ -471,7 +488,7 @@ function LiveAssistantResponse({ entry }: { entry: Extract<TeachingConversationT
           {reasoning ? reasoningTailText(reasoning) : activeStage ? stageDetailText(activeStage) : "正在整理思路…"}
         </span>
         {typeof entry.firstTokenMs === "number" ? (
-          <span className="teaching-speed-chip good" title="从思考开始到首个讲解内容到达的耗时（决策与检索等系统开销不计入）">首字 {formatSpeedMs(entry.firstTokenMs)}</span>
+          <span className="teaching-speed-chip good" title="提交到首个可见字符的耗时（2026-09-06 新口径：思考流与正文都计入，先到算谁）">首字 {formatSpeedMs(entry.firstTokenMs)}</span>
         ) : null}
         <span className="teaching-thinking-elapsed"><Loader2 className="spin" size={12} />{formatElapsed(liveElapsedMs)}</span>
         <ChevronRight size={15} className="teaching-thinking-chevron" aria-hidden="true" />
@@ -542,10 +559,14 @@ function LiveAssistantResponse({ entry }: { entry: Extract<TeachingConversationT
   );
 }
 
-/** 主区思考行只保留推理的最新片段，等价于 Qwen 在状态行上流式刷新的最新思考句。 */
-function reasoningTailText(reasoning: string) {
-  const tail = reasoning.slice(-60);
-  return tail.length < reasoning.length ? `…${tail}` : tail;
+/** 主区思考行只保留推理的最新片段，等价于 Qwen 在状态行上流式刷新的最新思考句。导出仅供单测覆盖码点截断边界。 */
+export function reasoningTailText(reasoning: string) {
+  // 必须按码点截断：String.slice 以 UTF-16 码元为单位，60 边界若落在代理对（emoji、生僻汉字）
+  // 中间会留下孤立代理项，浏览器渲染成 ""，制造前端侧新乱码（2026-09-08 思考流乱码排查中修复）。
+  // Array.from 按码点迭代，天然保证代理对/组合序列不被从中间切开。
+  const chars = Array.from(reasoning);
+  if (chars.length <= 60) return reasoning;
+  return `…${chars.slice(-60).join("")}`;
 }
 
 function countCharacters(value: string) {
@@ -602,7 +623,7 @@ function AssistantResponse({
       <EvidenceInspector response={response} stages={stages} sources={sources} reasoningTrace={reasoning} />
       <div className="teaching-answer-content">
         {typeof firstTokenMs === "number" ? (
-          <div className="teaching-speed-line" title="首字=思考开始到首个讲解内容（不含决策与检索） / 全程=本轮讲解总耗时">
+          <div className="teaching-speed-line" title="首字=提交到首个可见字符（思考与正文都计入，先到算谁） / 全程=本轮讲解总耗时">
             <span className="teaching-speed-chip good">首字 {formatSpeedMs(firstTokenMs)}</span>
             {typeof totalMs === "number" ? <span className="teaching-speed-chip">全程 {formatSpeedMs(totalMs)}</span> : null}
           </div>
@@ -855,7 +876,10 @@ function sourceSummaryText(sources: StudentExplanationResponse["sources"]) {
  * intentionally safe to expose so learners can inspect the exact evidence used by the RAG result.
  */
 function isSafeSourceUrl(value?: string): value is string {
-  return /^https?:\/\/\S+$/i.test(value?.trim() ?? "");
+  const url = value?.trim() ?? "";
+  // 远程审计链接，或后端同源、按 docId/page 受控物化的教材题图 URL（相似题图“阅览展示”走此路径）才可点击；
+  // 仍拒绝文件系统路径与 opaque retrieval URI。
+  return /^https?:\/\/\S+$/i.test(url) || /^\/api\/resources\/[^\s]*$/i.test(url);
 }
 
 export function visibleExplanationCards(cards: StudentExplanationResponse["cards"]) {
@@ -922,7 +946,7 @@ function renderEmphasisText(text: string, keyPrefix: string) {
     : <span key={`${keyPrefix}-plain-${index}`}>{part}</span>);
 }
 
-function RichText({ text }: { text: string }) {
+export function RichText({ text }: { text: string }) {
   const prepared = stripDecorationGlyphs(text || "");
   return (
     <>
@@ -1278,6 +1302,19 @@ function firstClipboardImage(items?: DataTransferItemList | null) {
 }
 
 /**
+ * 显式选中的模型能否接收图片；"自动"（空值）始终 true，因为后端带图会切视觉默认。
+ * 判定依据是后端目录的 vision 标记（纯色图探针实测），前端不做任何模型能力猜测。
+ */
+function selectedModelSupportsImage(catalog: AgentModelCatalogResponse | null, value: string): boolean {
+  if (!value) return true;
+  const [providerName, ...modelParts] = value.split("::");
+  const modelCode = modelParts.join("::");
+  const provider = (catalog?.providers ?? []).find((item) => item.name === providerName);
+  const option = (provider?.models ?? []).find((item) => item.modelCode === modelCode);
+  return option?.vision === true;
+}
+
+/**
  * 讲解模型选择器（老板 2026-09-01 二轮反馈）：原生 <select> 在 ZCode 内嵌浏览器里点击弹不出选项，
  * 改为 button + 弹出菜单的自定义下拉。菜单向上弹出（composer 固定在页面底部）；点击外部或选中后关闭。
  * 目录仍来自后端白名单（AgentModelCatalogResponse），这里只负责展示与选择，不做任何路由校验。
@@ -1286,10 +1323,13 @@ function ModelPicker({
   catalog,
   value,
   onChange,
+  hasImage,
 }: {
   catalog: AgentModelCatalogResponse | null;
   value: string;
   onChange: (next: string) => void;
+  /** 本轮是否携带题图；带图时后端把自动路由切到视觉模型，标签如实展示。 */
+  hasImage: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -1301,7 +1341,12 @@ function ModelPicker({
     document.addEventListener("mousedown", onDocMouseDown);
     return () => document.removeEventListener("mousedown", onDocMouseDown);
   }, [open]);
-  const autoLabel = `自动 · ${catalog ? `${catalog.defaultProviderName}/${catalog.defaultModelCode}` : "默认模型"}`;
+  // 带图轮次的自动路由由后端强制切到视觉默认（deepseek/glm 会静默丢图），标签跟随真实行为。
+  const autoLabel = catalog
+    ? hasImage && catalog.visionDefaultModelCode
+      ? `自动 · 视觉 ${catalog.visionDefaultProviderName}/${catalog.visionDefaultModelCode}`
+      : `自动 · ${catalog.defaultProviderName}/${catalog.defaultModelCode}`
+    : "自动 · 默认模型";
   const selectedLabel = value ? value.split("::").slice(1).join("::") : autoLabel;
   const providers = (catalog?.providers ?? []).filter((provider) => provider.enabled);
   return (
@@ -1350,7 +1395,9 @@ function ModelPicker({
                     }}
                   >
                     <span>{model.modelCode}</span>
-                    {model.modelLevel ? <small>{model.modelLevel}</small> : null}
+                    {model.modelLevel || model.vision ? (
+                      <small>{[model.modelLevel, model.vision ? "视觉" : null].filter(Boolean).join(" · ")}</small>
+                    ) : null}
                   </button>
                 );
               })}

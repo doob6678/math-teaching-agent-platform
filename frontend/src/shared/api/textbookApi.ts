@@ -896,6 +896,10 @@ export interface AgentModelCatalogResponse {
   defaultProviderName: string;
   /** Backend default model from environment. */
   defaultModelCode: string;
+  /** Default provider used when the turn carries an image; empty when none is vision-capable. */
+  visionDefaultProviderName?: string;
+  /** Default model used when the turn carries an image; empty when none is vision-capable. */
+  visionDefaultModelCode?: string;
   /** Backend fallback provider rotation order. */
   fallbackProviderOrder: string[];
   /** Enabled providers and their allow-listed model options. */
@@ -926,6 +930,8 @@ export interface AgentModelOption {
   modelLevel: string;
   /** Coarse price label for display. */
   priceTier: string;
+  /** Probe-verified image input support; image turns only route to vision models. */
+  vision?: boolean;
 }
 
 /**
@@ -2445,6 +2451,43 @@ const MAX_HANDOUT_EVIDENCE_LIMIT = 24;
 /** Prevents a large binary conversion from exceeding browser argument limits while preserving every byte. */
 const BASE64_BINARY_CHUNK_BYTES = 0x8000;
 
+/** 动画讲题章节时间戳（worker chapters.json 透传，start/duration 秒）。 */
+export interface AnimatedLessonChapter {
+  id: string;
+  title: string;
+  subtitle?: string;
+  start: number;
+  duration: number;
+}
+
+/** 结构化解析卡数据：教学正文全部来自 AI 分镜，字段名与 worker problem 对象一致。 */
+export interface AnimatedLessonProblem {
+  stem: string;
+  known: string[];
+  goal: string;
+  core_observation: string;
+  answer: string;
+}
+
+/** /api/animated-lessons/{taskId}/meta 响应；result 为 worker 响应原文，未完成时 null。 */
+export interface AnimatedLessonMeta {
+  taskId: string;
+  workflowId: string;
+  status: string;
+  errorSummary: string | null;
+  attempt: number;
+  createdAt: string;
+  updatedAt: string;
+  result: {
+    lessonId: string;
+    durationSec: number;
+    chapters: AnimatedLessonChapter[];
+    problem: AnimatedLessonProblem;
+    providerName?: string | null;
+    modelCode?: string | null;
+  } | null;
+}
+
 export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = fetch) {
   const normalizedBaseUrl = baseUrl.replace(/\/+$/, "");
   /**
@@ -3929,6 +3972,31 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
     async rebuildTeacherResourceVectorIndex(documentId: string): Promise<VectorIndexRebuildResponse> {
       const path = `/api/vector-index/teacher-resources/${encodeURIComponent(documentId)}/rebuild`;
       return requestJson<VectorIndexRebuildResponse>(path, { method: "POST" });
+    },
+
+    /**
+     * 动画讲题（一题一课）：提交题干入队分钟级渲染任务，立即返回轮询句柄。
+     * 请求体字段与 Java AnimatedLessonSubmission/worker AnimatedLessonRunRequest 合同对齐，
+     * lessonId/render/storyboard 留空走服务端默认（render=true、由 AI 生成分镜）。
+     */
+    async createAnimatedLessonTask(
+      problemText: string,
+    ): Promise<{ taskId: string; workflowId: string; status: string }> {
+      return requestJson("/api/animated-lessons/tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ problemText }),
+      });
+    },
+
+    /** 轮询任务状态；result 在 COMPLETED 时为 worker 响应原文（chapters/problem/durationSec）。 */
+    async animatedLessonMeta(taskId: string): Promise<AnimatedLessonMeta> {
+      return requestJson<AnimatedLessonMeta>(`/api/animated-lessons/${encodeURIComponent(taskId)}/meta`);
+    },
+
+    /** 视频直链：Java 端点支持 Range/206，<video> 可直接 seek；鉴权走会话 cookie。 */
+    animatedLessonVideoUrl(taskId: string): string {
+      return `${normalizedBaseUrl}/api/animated-lessons/${encodeURIComponent(taskId)}/video`;
     },
   };
 }

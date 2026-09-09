@@ -79,22 +79,32 @@ final class TextbookMilvusSearchClient {
             return List.of();
         }
         int requested = Math.max(1, Math.min(MAX_SEARCH_LIMIT, limit));
-        int candidateLimit = Math.min(MAX_SEARCH_LIMIT, Math.max(requested, requested * Math.max(1, normalizedDocIds(docIds).size())));
+        // 授权过滤下推为 Milvus 标量表达式（metadata["doc_id"] in [...]），与教师资源路
+        // （VectorIndexService.milvusMetadataFilter）口径一致。此前本路是"放大候选 + Java 后置过滤"：
+        // 未授权内容会先进入响应体（泄露面），且 topK 被未授权文档占满时过滤后可能凑不齐结果。
+        // 线上集合 metadata 为 JSON 字段（2026-09-07 describe 核实），JSON path 过滤直接可用，无需重建。
+        List<String> allowed = normalizedDocIds(docIds);
         Map<String, MilvusHit> bestById = new LinkedHashMap<>();
         for (List<Double> vector : vectors) {
             Map<String, Object> body = new LinkedHashMap<>();
             body.put("collectionName", collectionName);
             body.put("data", List.of(vector));
-            body.put("limit", candidateLimit);
+            body.put("limit", requested);
             body.put("outputFields", List.of("id", "text", "metadata"));
             body.put("searchParams", Map.of("metricType", "COSINE", "params", Map.of()));
+            if (!allowed.isEmpty()) {
+                body.put("filter", documentFilterExpression(allowed));
+            }
             var response = milvusPost("/v2/vectordb/entities/search", body);
             JsonNode root = responseJson("Milvus textbook search", response);
             log.debug("textbook_milvus_search collection={} requested={} responseStatus={} rawHits={}",
                     collectionName, requested, response.statusCode(), root.path("data").isArray() ? root.path("data").size() : -1);
             for (JsonNode item : root.path("data")) {
                 JsonNode metadata = metadata(item.path("metadata").asText("{}"));
-                if (!matchesDocumentFilter(metadata, docIds)) {
+                // 纵深防御断言：下推生效后不应再有越界命中；出现即 WARN 暴露过滤表达式失效，而不是静默兜底。
+                if (!matchesDocumentFilter(metadata, allowed)) {
+                    log.warn("textbook_milvus_filter_bypass_detected collection={} hit_id={} pushed_down={}",
+                            collectionName, item.path("id").asText(""), !allowed.isEmpty());
                     continue;
                 }
                 String id = item.path("id").asText("");
@@ -175,9 +185,29 @@ final class TextbookMilvusSearchClient {
         return Map.of("Authorization", "Bearer " + (properties.embeddingApiKey() == null ? "" : properties.embeddingApiKey()));
     }
 
-    private static boolean matchesDocumentFilter(JsonNode metadata, List<String> docIds) {
-        List<String> expected = normalizedDocIds(docIds);
+    /** expected 必须是 {@link #normalizedDocIds} 去空白去重后的集合；空集合表示公共语料不设限。 */
+    private static boolean matchesDocumentFilter(JsonNode metadata, List<String> expected) {
         return expected.isEmpty() || expected.contains(metadata.path("doc_id").asText(""));
+    }
+
+    /**
+     * 拼 Milvus JSON path 标量过滤表达式。doc_id 值来自服务端签发的授权集合而非用户输入，
+     * 但仍按教师路同款规则转义（反斜杠/双引号加倍），防表达式注入。
+     */
+    private static String documentFilterExpression(List<String> allowedDocIds) {
+        StringBuilder values = new StringBuilder();
+        for (int i = 0; i < allowedDocIds.size(); i++) {
+            if (i > 0) {
+                values.append(", ");
+            }
+            values.append(milvusLiteral(allowedDocIds.get(i)));
+        }
+        return "metadata[\"doc_id\"] in [" + values + "]";
+    }
+
+    private static String milvusLiteral(String value) {
+        String safeValue = value == null ? "" : value;
+        return "\"" + safeValue.replace("\\", "\\\\").replace("\"", "\\\"") + "\"";
     }
 
     private static List<String> normalizedDocIds(List<String> docIds) {

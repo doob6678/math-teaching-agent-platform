@@ -52,6 +52,24 @@ public class AgentWorkerTaskDispatchService {
         return saved;
     }
 
+    /**
+     * Commits one durable Worker command and returns the created task row.
+     *
+     * <p>动画讲题等非讲义 workload 复用同一 agent_worker_task + outbox 通道：所有权（tenant 与 subject）仍记在
+     * 既有 multi_agent_writing_workflow 行上——agent_worker_task.workflow_id 有外键指向该表，任务行因此天然可鉴权、
+     * 可重投递复原身份，无需扩表。与 {@link #submit} 的差别只在返回任务本身：前端轮询句柄与产物目录都以 task_id 为键。
+     * requestJson 形状由具体 stage 的服务自定（消费者按 stage_code 分流解析），调度层保持不透明。</p>
+     */
+    @Transactional
+    public AgentWorkerTask create(
+            MultiAgentWritingWorkflowRecord workflow, String agentCode, String stageCode, String requestJson) {
+        MultiAgentWritingWorkflowRecord saved = workflowStore.save(workflow);
+        AgentWorkerTask task = taskStore.create(
+                saved.workflowId(), saved.tenantId(), agentCode, stageCode, requestJson);
+        outboxStore.enqueue(task);
+        return task;
+    }
+
     public boolean handleFailure(AgentWorkerTask task, String errorSummary, int maximumAttempts) {
         AgentWorkerTask retry = taskStore.failOrRequeue(task, errorSummary, maximumAttempts);
         if (retry != null) {

@@ -120,15 +120,20 @@ public class StudentExplanationAiCardService {
                 observations == null ? List.of() : observations,
                 safe(imageDataUrl),
                 event -> {
-                    // 决策流的真实思考增量进 reasoning 槽位；决策 JSON 正文（decision/cards）绝不能外泄——
-                    // 它既不是可见答案也不是思考文本，最终结论统一由 completed 终态事件下发。
-                    if (!"delta".equals(event.eventName()) || safe(event.reasoning()).isBlank()) {
+                    // 决策流思考增量进 reasoning 槽位；content 槽位携带决策 JSON 原文增量，由投影层
+                    // （StudentExplanationController.visibleProviderDelta）宽容提取：只放行 title/summary/items
+                    // 文本字段值，decision/tools/queries 与 JSON 语法永不进学生流（单测覆盖 action 轮零正文）。
+                    // 老板 2026-09-06 拍板 finalDraft 轮正文流式，带图首字从整包完成（实测 15~34s）降到首个字段到达。
+                    // 决策草稿可能被调用方丢弃（显式模型偏好强制 compose），由调用方监听器负责剥离 content。
+                    if (!"delta".equals(event.eventName())
+                            || (safe(event.reasoning()).isBlank() && safe(event.content()).isBlank())) {
                         return;
                     }
                     StudentExplanationAiStreamListener listener = streamListener == null
                             ? StudentExplanationAiStreamListener.NOOP : streamListener;
                     listener.onDelta(new AiChatStreamDelta(
-                            event.providerName(), event.modelCode(), safe(event.reasoning()), "", 0, 0, 0), List.of());
+                            event.providerName(), event.modelCode(), safe(event.reasoning()), safe(event.content()),
+                            0, 0, 0), List.of());
                 },
                 safe(preferredProviderName),
                 safe(preferredModelCode));

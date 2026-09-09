@@ -33,6 +33,8 @@ public class AgentModelCatalogController {
         return new AgentModelCatalogResponse(
                 catalog.defaultProviderName(),
                 catalog.defaultModelCode(),
+                catalog.visionDefaultProviderName(),
+                catalog.visionDefaultModelCode(),
                 catalog.fallbackProviderOrder(),
                 catalog.providers().stream()
                         .map(provider -> new AgentModelCatalogResponse.Provider(
@@ -43,7 +45,8 @@ public class AgentModelCatalogController {
                                         .map(model -> new AgentModelCatalogResponse.Model(
                                                 model.modelCode(),
                                                 model.modelLevel(),
-                                                model.priceTier()))
+                                                model.priceTier(),
+                                                model.vision()))
                                         .toList()))
                         .toList());
     }
