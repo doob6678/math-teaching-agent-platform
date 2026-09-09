@@ -68,7 +68,9 @@ function math(s){
 function select(i){
   cur = i;
   const L = LESSONS[i];
-  v.src = '../out/' + L.id + '/final.mp4';
+  // 本地验收页：视频重渲后文件名不变，浏览器会命中旧缓存（09-09 老板看到的旧片即此因），
+  // 用时间戳查询参数强制取最新产物。
+  v.src = '../out/' + L.id + '/final.mp4?t=' + Date.now();
   document.getElementById('stem').innerHTML = '题干：' + math(L.problem.stem);
   document.querySelectorAll('.tab').forEach((t,k)=>t.classList.toggle('on',k===i));
   const cs = document.getElementById('chs'); cs.innerHTML = '';

@@ -315,6 +315,10 @@ class LessonScene(Scene):
         if new.width > 13.4:
             new.set_width(13.4)
         new.move_to([0, self.caption_y, 0])
+        # caption_y 是中心锚点：含 \frac 的混排行高度约 1，分母会沉出画面底边（y=-4）。
+        # 整行上移回安全区，只抬高不压低，普通单行字幕不受影响。
+        if new.get_bottom()[1] < -3.9:
+            new.shift(UP * (-3.9 - new.get_bottom()[1]))
         anims = [FadeIn(new)]
         if self.caption_mob:
             anims = [FadeOut(self.caption_mob), FadeIn(new)]

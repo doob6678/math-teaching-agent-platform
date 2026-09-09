@@ -130,3 +130,13 @@ route 签发按老板口径 **glm 主位、deepseek 备、不回退 Terra**；mv
 **稳定性修复（同日 agent）**：讲解流 conc>4 的 500 根因修复——worker 流执行器改
 env 可配并发（默认 4）+BoundedSemaphore 有界等待 15s，409/429 冲突改为 error 事件携带
 真实状态码不再在 SSE 头后 raise；provider 429 透传+Retry-After。全量 222 测试 OK。
+
+**字幕公式验收修复（09-09 中午，老板实拍反馈）**：老板在 demo 页看到椭圆课题目字幕
+"根号没套上、分数不平铺"——两层根因：①该视频渲染时间早于分镜文件的 LaTeX 修正，是旧片；
+重渲后公式正确（\frac 竖排、\sqrt 覆盖、\triangle 下标）。②抽帧复阅发现新缺陷：
+分式竖排后字幕行高约 1，`_caption` 用中心锚点 caption_y=-3.62，分母沉出 1080p 画面底边。
+lesson_runtime 加通用钳制（底边低于 -3.9 整行上移，只抬不压，普通单行不受影响），
+含 \frac/\sqrt 高字幕的课全部按新编译器重渲（ellipse/tangent-angle/two-circle/tangent-min，
+q-016 待明日校验器规则后随重生成一并覆盖）。新增 ai_gen/scan_unicode_math.py、
+scan_bad_latex.py、scan_caption_height.py 三个扫描器：前者确认无课再犯伪数学，
+后者列出高字幕清单作为重渲依据。
