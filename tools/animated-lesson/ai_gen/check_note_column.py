@@ -13,16 +13,24 @@ Y_CAP = int((4 - (-3.25)) / 8 * H)   # 字幕带顶界（caption 中心 -3.62，
 
 
 def dark(px, x, y, th=120):
-    return px[x, y] < th
+    """只认中性暗像素（墨色文字）。章节横幅是蓝底白字（B 通道远高于 R），
+    09-09 扫描发现横幅出现瞬间会误报"卡顶残留"——按色度过滤掉。"""
+    r, g, b = px[x, y]
+    lum = 0.299 * r + 0.587 * g + 0.114 * b
+    return lum < th and (max(r, g, b) - min(r, g, b)) < 45
 
 
 def check(path: str) -> bool:
-    im = Image.open(path).convert("L")
+    im = Image.open(path).convert("RGB")
     px = im.load()
     # 卡顶定位：列区内从上往下第一条"连续灰框横线"（>40% 列宽的中灰像素）
     card_top = None
     for y in range(0, H // 2):
-        run = sum(1 for x in range(X0, X1, 4) if 120 <= px[x, y] <= 200)
+        def grayish(x):
+            r, g, b = px[x, y]
+            lum = 0.299 * r + 0.587 * g + 0.114 * b
+            return 120 <= lum <= 200 and (max(r, g, b) - min(r, g, b)) < 45
+        run = sum(1 for x in range(X0, X1, 4) if grayish(x))
         if run > (X1 - X0) // 4 * 0.5:
             card_top = y
             break
