@@ -160,6 +160,7 @@ class LessonScene(Scene):
         self.caption_y = -3.62
         self.banner_y = 3.55
         self.note_y = self.note_region[3] - 0.35  # 首行从笔记本顶部开始，不是屏幕中线
+        self.card_bottom = self.note_region[3]    # 题干卡底边；_problem_card 会下移它
 
     def _build_axes(self):
         v = self.sb["view"]
@@ -280,7 +281,78 @@ class LessonScene(Scene):
             mobs.append(m)
         return VGroup(*mobs).arrange(RIGHT, buff=0.14, aligned_edge=DOWN)
 
+    # 拉丁/数字/半角符号成词，其余（CJK）逐字成 token——供 _mixed_wrapped 贪心换行
+    _WORD_RUN = re.compile(r"[A-Za-z0-9%.,;:!?\-–—/\\=+\s()（）]+|.")
+
+    def _mixed_wrapped(self, text, width, font_size, math_size=None):
+        """$...$ 混排 + 按实测宽度贪心换行：CJK 逐字、公式段原子不可拆，
+        行首禁标点（悬挂到上一行）。MathTex 失败降级 Text，与 _mixed 同策略。"""
+        tokens = []  # (mob, is_math, raw)
+        for i, seg in enumerate(re.split(r"\$([^$]+)\$", text)):
+            if not seg:
+                continue
+            if i % 2 == 1:
+                try:
+                    m = MathTex(seg, color=str(INK), font_size=math_size or font_size + 6)
+                except Exception:
+                    m = Text(seg, font=FONT, font_size=font_size, color=INK)
+                tokens.append((m, True, seg))
+            else:
+                for piece in self._WORD_RUN.findall(seg):
+                    if not piece.isspace() and piece:
+                        tokens.append((Text(piece, font=FONT, font_size=font_size, color=INK), False, piece))
+        lines, cur, cur_w = [], [], 0.0
+        for mob, is_math, raw in tokens:
+            w = mob.width
+            hang = (not is_math) and raw in "，。、；？！：）》"
+            if cur and not hang and cur_w + 0.06 + w > width:
+                lines.append(VGroup(*cur).arrange(RIGHT, buff=0.06, aligned_edge=DOWN))
+                cur, cur_w = [mob], w
+            else:
+                cur.append(mob)
+                cur_w += 0.06 + w
+        if cur:
+            lines.append(VGroup(*cur).arrange(RIGHT, buff=0.06, aligned_edge=DOWN))
+        out = VGroup(*lines).arrange(DOWN, buff=0.1, aligned_edge=LEFT)
+        if out.width > width:
+            out.set_width(width)
+        return out
+
     # ---------- 笔记本 / 字幕 / 横幅 ----------
+
+    def _note_slot(self, m):
+        """笔记本列取位。note_y 语义=下一行的顶边锚点（09-09 终版）：
+        旧版按"上一行中心-上一行高"推进，行高不等时（结论框比推导行高 35%）
+        高行顶会咬进上一行分母——顶边锚点对任意行高保证固定行距。
+        行底越过区域下界则整列上滚，滚后行顶越过题干卡底边的行全部淡出
+        （黑板写满擦最早一笔；只擦最老一行在卡高时会漏，实拍抓到残字）。"""
+        x0, x1, y0, _ = self.note_region
+        m.move_to([(x0 + x1) / 2, self.note_y - m.height / 2, 0])
+        if self.note_y - m.height < y0 and self.note_lines:
+            dy = m.height + 0.18
+            hide_n = 0
+            for ln in self.note_lines:
+                if ln.get_top()[1] + dy > self.card_bottom - 0.02:
+                    hide_n += 1
+                else:
+                    break
+            # 逐行 animate.shift 就地移动，播完不再手动 shift：
+            # Transform/shift 混用会双倍位移，擦除预测与显示位置错位（09-09 两轮实拍定位）
+            anims = [ln.animate.shift(UP * dy) for ln in self.note_lines[hide_n:]]
+            anims += [FadeOut(ln) for ln in self.note_lines[:hide_n]]
+            self.play(*anims, run_time=0.35)
+            self.note_lines = self.note_lines[hide_n:]
+            self.note_group = VGroup(*self.note_lines)
+            self.note_y += dy
+            m.move_to([(x0 + x1) / 2, self.note_y - m.height / 2, 0])
+
+    def _note_commit(self, m):
+        self.note_lines.append(m)
+        if self.note_group is None:
+            self.note_group = VGroup(m)
+        else:
+            self.note_group.add(m)
+        self.note_y = m.get_bottom()[1] - 0.22
 
     def _note(self, step, scale_t):
         text = step.get("text", "")
@@ -292,23 +364,12 @@ class LessonScene(Scene):
                 m = Text(_unicode_math(text), font=FONT, font_size=26, color=INK)
         else:
             m = self._mixed(text, font_size=25)
-        x0, x1, y0, _ = self.note_region
-        m.move_to([(x0 + x1) / 2, self.note_y, 0])
+        x0, x1, _, _ = self.note_region
         if m.width > x1 - x0:
             m.set_width(x1 - x0 - 0.1)
-        if self.note_y - m.height / 2 < y0 and self.note_lines:
-            shift = UP * (m.height + 0.18)
-            self.play(Transform(self.note_group, self.note_group.copy().shift(shift)), run_time=0.35)
-            for ln in self.note_lines:
-                ln.shift(shift)
-            self.note_y += m.height + 0.18
+        self._note_slot(m)
         self.play(FadeIn(m, shift=DOWN * 0.12), run_time=0.35 * scale_t)
-        self.note_lines.append(m)
-        if self.note_group is None:
-            self.note_group = VGroup(m)
-        else:
-            self.note_group.add(m)
-        self.note_y -= m.height + 0.22
+        self._note_commit(m)
 
     def _caption(self, step):
         new = self._mixed(step["text"], font_size=27, math_size=34)
@@ -348,15 +409,44 @@ class LessonScene(Scene):
         self.banner_small = banner
 
     def _answer(self, step):
+        """结论框进笔记本列流（09-09 修复：原固定坐标 [4.0,1.6] 正压在公式流上，
+        推导行一多就叠罗汉——老板实拍）。宽超列先收窄，再走 _note_slot 防压滚动。"""
         text = step.get("text", "")
         try:
             m = MathTex(text, color=str(RED), font_size=40)
         except Exception:
             m = Text(_unicode_math(text), font=FONT, font_size=34, color=RED)
         box = SurroundingRectangle(m, buff=0.18, corner_radius=0.1, color=GREEN, stroke_width=3)
-        grp = VGroup(m, box).move_to([4.0, 1.6, 0])
+        grp = VGroup(m, box)
+        x0, x1, _, _ = self.note_region
+        if grp.width > x1 - x0:
+            grp.set_width(x1 - x0 - 0.1)
+        self._note_slot(grp)
         self.play(FadeIn(grp, scale=0.9), run_time=0.5)
+        self._note_commit(grp)
         self.play(Indicate(grp, color=GREEN), run_time=0.6)
+
+    def _problem_card(self):
+        """题干常驻卡（老板 09-09：题干要在讲解画面里一直在）：钉在笔记本列顶，
+        推导行从卡下方起流。字号阶梯 18→12 逐级试排，压到列高 45% 内即停；
+        纸色不透明底盖住滚动经过的行，add_foreground 保证永不被板书压住。"""
+        stem = (self.sb.get("problem") or {}).get("stem", "")
+        x0, x1, y0, y1 = self.note_region
+        if not stem:
+            return
+        max_h = (y1 - y0) * 0.45
+        card = None
+        for fs, ms in ((18, 24), (16, 21), (14, 19), (12, 17)):
+            card = self._mixed_wrapped(stem, x1 - x0 - 0.36, fs, ms)
+            if card.height <= max_h:
+                break
+        box = SurroundingRectangle(card, buff=0.16, corner_radius=0.08, color=GRAY,
+                                   stroke_width=1.5, fill_color=PAPER, fill_opacity=1.0)
+        grp = VGroup(box, card)
+        grp.move_to([(x0 + x1) / 2, y1 - 0.05 - grp.height / 2, 0])
+        self.add_foreground_mobject(grp)
+        self.card_bottom = grp.get_bottom()[1]
+        self.note_y = self.card_bottom - 0.32
 
     def _make_angle(self, spec, v, a, b):
         """角标记：style=square 为教材直角小方块（数学单位尺寸），否则为弧。"""
@@ -519,6 +609,7 @@ class LessonScene(Scene):
         self.camera.background_color = PAPER
         self._layout()
         self._build_axes()
+        self._problem_card()  # 题干常驻，先于任何 note/answer 落位（它们从卡下方起流）
         for idx, ch in enumerate(self.sb["chapters"], 1):
             self.next_section(ch["id"])
             steps = ch["steps"]
