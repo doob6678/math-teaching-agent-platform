@@ -12,7 +12,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(HERE, "out")
 DEMO = os.path.join(HERE, "demo")
 
-LESSON_ORDER = ["tangent-min", "two-circle-tangents", "tangent-angle", "ellipse-moving-line"]
+LESSON_ORDER = ["tangent-min", "two-circle-tangents", "tangent-angle", "ellipse-moving-line",
+                "sum-arithmetic-parabola"]
 
 
 def fmt(t):

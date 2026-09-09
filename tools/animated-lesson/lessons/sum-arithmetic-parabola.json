@@ -1,0 +1,164 @@
+{
+  "schema": "lesson-plan/v1",
+  "id": "sum-arithmetic-parabola",
+  "title": "一题一课 · 等差数列前n项和的二次函数形式",
+  "problem": {
+    "stem": "$\\{a_n\\}$ 是等差数列 $\\iff$ $S_n=\\frac{d}{2}n^2+\\left(a_1-\\frac{d}{2}\\right)n$。$S_n$ 作为 $n$ 的二次函数，图象有什么特征？",
+    "known": [
+      "$\\{a_n\\}$ 是等差数列，公差为 $d$",
+      "$S_n=na_1+\\frac{n(n-1)d}{2}$",
+      "整理为 $S_n=An^2+Bn$ 的形式"
+    ],
+    "goal": "推导 $S_n=\\frac{d}{2}n^2+\\left(a_1-\\frac{d}{2}\\right)n$，读出 $A$、$B$ 与常数项",
+    "core_observation": "展开后常数项为 $0$：$S_n=An^2+Bn$ 的图象是过原点的抛物线（$d\\neq 0$ 时）。取 $a_1=1$、$d=2$，则 $S_n=n^2$，点 $(n,S_n)$ 恰好落在 $y=x^2$ 上。",
+    "answer": "$A=\\frac{d}{2}$，$B=a_1-\\frac{d}{2}$，常数项为 $0$"
+  },
+  "view": {
+    "x": [-3.5, 3.5],
+    "y": [-0.5, 9.8],
+    "axes": true,
+    "ticks": {
+      "x": [1, 2, 3],
+      "y": [4, 9]
+    }
+  },
+  "objects": {
+    "O": {
+      "type": "point",
+      "at": [0, 0],
+      "label": "$O$"
+    },
+    "P1": {
+      "type": "point",
+      "at": [1, 1],
+      "label": "$(1,1)$"
+    },
+    "P2": {
+      "type": "point",
+      "at": [2, 4],
+      "label": "$(2,4)$"
+    },
+    "P3": {
+      "type": "point",
+      "at": [3, 9],
+      "label": "$(3,9)$"
+    },
+    "parabola": {
+      "type": "function",
+      "expr": "x**2",
+      "x": [-3, 3]
+    }
+  },
+  "chapters": [
+    {
+      "id": "ch1",
+      "title": "知识点呈现",
+      "subtitle": "等差数列与二次函数形式",
+      "narration": "等差数列的前 n 项和，藏着二次函数的结构。a n 是等差数列，当且仅当 S n 等于 d 除以二，乘 n 的平方，加上 a 一减 d 除以二，乘 n。这一课我们把它推出来，再看它的图象。",
+      "steps": [
+        {
+          "op": "caption",
+          "text": "$\\{a_n\\}$ 等差 $\\iff$ $S_n$ 是 $n$ 的二次函数"
+        },
+        {
+          "op": "note",
+          "kind": "formula",
+          "text": "S_n=na_1+\\frac{n(n-1)d}{2}"
+        },
+        {
+          "op": "note",
+          "kind": "formula",
+          "text": "=\\frac{d}{2}n^2+\\left(a_1-\\frac{d}{2}\\right)n"
+        }
+      ]
+    },
+    {
+      "id": "ch2",
+      "title": "实例描点",
+      "subtitle": "奇数列求和，S_n=n²",
+      "narration": "取一个最干净的例子：首项为一，公差为二，数列就是一、三、五、七这些奇数。前 n 项和 S n 恰好等于 n 的平方。描出点：n 等于一，S 等于一；n 等于二，S 等于四；n 等于三，S 等于九。",
+      "steps": [
+        {
+          "op": "caption",
+          "text": "取 $a_1=1$，$d=2$：$S_n=n^2$"
+        },
+        {
+          "op": "show",
+          "ref": "P1"
+        },
+        {
+          "op": "label",
+          "ref": "P1",
+          "offset": [0.3, 0.35]
+        },
+        {
+          "op": "show",
+          "ref": "P2"
+        },
+        {
+          "op": "label",
+          "ref": "P2",
+          "offset": [0.3, 0.35]
+        },
+        {
+          "op": "show",
+          "ref": "P3"
+        },
+        {
+          "op": "label",
+          "ref": "P3",
+          "offset": [0.3, 0.35]
+        }
+      ]
+    },
+    {
+      "id": "ch3",
+      "title": "拟合成抛物线",
+      "subtitle": "点全落在 y=x² 上",
+      "narration": "把这三个点连起来看：它们恰好落在抛物线 y 等于 x 的平方上。注意抛物线过原点——因为 S n 的表达式里没有常数项。原点处对应 n 等于零，前零项和为零零，数学上完全自洽。",
+      "steps": [
+        {
+          "op": "draw",
+          "ref": "parabola"
+        },
+        {
+          "op": "caption",
+          "text": "点 $(n,S_n)$ 全落在 $y=x^2$ 上"
+        },
+        {
+          "op": "show",
+          "ref": "O"
+        },
+        {
+          "op": "highlight",
+          "refs": ["O"]
+        },
+        {
+          "op": "note",
+          "text": "常数项为 $0$ → 图象恒过原点"
+        }
+      ]
+    },
+    {
+      "id": "ch4",
+      "title": "结论",
+      "subtitle": "A、B 的系数含义",
+      "narration": "回到一般形式。二次项系数 A 等于 d 除以二，一次项系数 B 等于 a 一减 d 除以二，常数项恒为零。反过来也成立：只要 S n 等于 A n 平方加 B n，数列必是等差数列，公差就是二 A。",
+      "steps": [
+        {
+          "op": "caption",
+          "text": "反过来：$S_n=An^2+Bn$ 的常数项必为 $0$"
+        },
+        {
+          "op": "note",
+          "kind": "formula",
+          "text": "A=\\frac{d}{2},\\ B=a_1-\\frac{d}{2},\\ C=0"
+        },
+        {
+          "op": "answer",
+          "text": "S_n=\\frac{d}{2}n^2+\\left(a_1-\\frac{d}{2}\\right)n"
+        }
+      ]
+    }
+  ]
+}
