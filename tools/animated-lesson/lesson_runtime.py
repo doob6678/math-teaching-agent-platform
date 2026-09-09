@@ -461,8 +461,13 @@ class LessonScene(Scene):
             pts = [(v[0] + s * u1[0], v[1] + s * u1[1]),
                    (v[0] + s * (u1[0] + u2[0]), v[1] + s * (u1[1] + u2[1])),
                    (v[0] + s * u2[0], v[1] + s * u2[1])]
-            return Polygon(*[self._m2s(*p) for p in pts],
-                           stroke_color=ORANGE, stroke_width=2.5)
+            # 直角记号=小方角的两条开口边（09-09 老板实拍：Polygon 三点自动闭合
+            # 出斜边，画成了三角形）。两条 Line 拼接，不闭合。
+            sp = [self._m2s(*p) for p in pts]
+            return VGroup(
+                Line(sp[0], sp[1], stroke_color=ORANGE, stroke_width=2.5),
+                Line(sp[1], sp[2], stroke_color=ORANGE, stroke_width=2.5),
+            )
         av = math.atan2(a[1] - v[1], a[0] - v[0])
         bv = math.atan2(b[1] - v[1], b[0] - v[0])
         return Arc(radius=spec.get("radius", 0.3), start_angle=min(av, bv), angle=abs(bv - av),
